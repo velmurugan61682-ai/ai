@@ -1,0 +1,105 @@
+import { AIModelMetadata } from './modelTypes';
+
+export const INITIAL_AI_MODELS: AIModelMetadata[] = [
+  {
+    id: 'qwen3-0.6b',
+    name: 'Qwen3 0.6B',
+    subtitle: 'Qwen2.5 0.5B Instruct · Q4_K_M',
+    family: 'Qwen',
+    parameters: '0.5B (0.6B Active)',
+    quantization: 'Q4_K_M',
+    fileSizeMB: 398,
+    downloadSizeMB: 398,
+    minPhysicalRAMGB: 2.0,
+    recommendedAvailableRAMGB: 1.0,
+    minStorageMB: 500,
+    contextWindow: 2048,
+    speedRating: 5,
+    accuracyRating: 4,
+    memoryEfficiencyRating: 5,
+    downloadUrl:
+      'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf',
+    fileName: 'qwen2.5-0.5b-instruct-q4_k_m.gguf',
+    sha256Checksum: '5977ba2ff35b8cb4e7aebaaae1f56475ba54117ae84bc838eeea7e30d47d4e32',
+    description:
+      'Ultra-lightweight edge AI model. Exceptional inference speed on constrained Android hardware with minimal battery impact.',
+    license: 'Apache 2.0',
+    tags: ['Edge AI', 'Ultra Fast', 'Low Memory', 'Tanglish Support'],
+    strengths: [
+      'Blazing fast response (25-50+ tokens/sec on mobile)',
+      'Under 400MB memory footprint during execution',
+      'Minimal thermal throttling and battery consumption',
+      'Strong multilingual parsing (English, Tamil, Tanglish)',
+    ],
+    recommendedFor: ['speed', 'lowest-memory', 'overall'],
+  },
+  {
+    id: 'qwen3-1.7b',
+    name: 'Qwen3 1.7B',
+    subtitle: 'Qwen2.5 1.5B Instruct · Q4_K_M',
+    family: 'Qwen',
+    parameters: '1.5B (1.7B Active)',
+    quantization: 'Q4_K_M',
+    fileSizeMB: 986,
+    downloadSizeMB: 986,
+    minPhysicalRAMGB: 3.5,
+    recommendedAvailableRAMGB: 2.0,
+    minStorageMB: 1200,
+    contextWindow: 4096,
+    speedRating: 4,
+    accuracyRating: 5,
+    memoryEfficiencyRating: 4,
+    downloadUrl:
+      'https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf',
+    fileName: 'qwen2.5-1.5b-instruct-q4_k_m.gguf',
+    sha256Checksum: 'ca7235fe12c5b7cb3724a7cf5eb25b90da8933b8a1c322b7936a7b738c823f6e',
+    description:
+      'High reasoning capability and advanced linguistic comprehension. Best balance between parameter depth and mobile speed.',
+    license: 'Apache 2.0',
+    tags: ['High Reasoning', 'Multilingual Pro', 'Complex Intent'],
+    strengths: [
+      'Superior reasoning and structured JSON output accuracy',
+      'Rich Tanglish and colloquial language translation',
+      'Handles extended context up to 4096 tokens smoothly',
+      'Balanced for mid-range and flagship smartphones',
+    ],
+    recommendedFor: ['accuracy', 'overall'],
+  },
+  {
+    id: 'llama-3.2-1b',
+    name: 'Llama 3.2 1B',
+    subtitle: 'Meta Llama 3.2 1B Instruct · Q4_K_M',
+    family: 'Llama',
+    parameters: '1.2B Parameters',
+    quantization: 'Q4_K_M',
+    fileSizeMB: 808,
+    downloadSizeMB: 808,
+    minPhysicalRAMGB: 3.0,
+    recommendedAvailableRAMGB: 1.6,
+    minStorageMB: 1000,
+    contextWindow: 4096,
+    speedRating: 4,
+    accuracyRating: 5,
+    memoryEfficiencyRating: 4,
+    downloadUrl:
+      'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf',
+    fileName: 'Llama-3.2-1B-Instruct-Q4_K_M.gguf',
+    sha256Checksum: 'c527e7ae9a8f465c4fc1994e015dca8a7e0d306b38c26bbef0da85aa66db2ca2',
+    description:
+      'State-of-the-art 1B instruction-following model by Meta. Exceptional world knowledge, concise summarization, and inventory logic.',
+    license: 'Llama 3.2 Community License',
+    tags: ['Meta Llama', 'Enterprise Ready', 'Instruction Master'],
+    strengths: [
+      'Pristine instruction-following capabilities',
+      'High accuracy for enterprise tasks and inventory analysis',
+      'Excellent code and structured key-value formatting',
+      'Rock solid stability and prompt alignment',
+    ],
+    recommendedFor: ['accuracy', 'overall'],
+  },
+];
+
+export function getModelById(id: string): AIModelMetadata | undefined {
+  return INITIAL_AI_MODELS.find((m) => m.id === id);
+}
+

@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "SaaS AI Brain",
+    "slug": "saas-ai-brain",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "android": {
+      "package": "com.saasaibrain.app",
+      "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE"
+      ]
+    },
+    "plugins": [
+      "llama.rn"
+    ]
+  }
+}

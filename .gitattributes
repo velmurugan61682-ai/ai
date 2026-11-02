@@ -1,0 +1,23 @@
+# Auto detect text files and normalize line endings
+* text=auto
+
+# Explicitly declare text files you want to always be normalized and converted to native line endings on checkout
+*.ts text
+*.tsx text
+*.js text
+*.json text
+*.md text
+*.gradle text
+*.properties text
+*.xml text
+*.pro text
+
+# Declare binary files to never be touched
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.so binary
+*.jar binary
+*.aar binary
