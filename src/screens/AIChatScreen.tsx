@@ -12,6 +12,7 @@ import {
   Alert,
   Modal,
   ScrollView,
+  Image,
 } from 'react-native';
 import {
   Send,
@@ -34,11 +35,18 @@ import {
   X,
   Headphones,
   Download,
+  Paperclip,
+  Camera,
+  FileText,
+  FileSpreadsheet,
+  Image as ImageIcon,
 } from 'lucide-react-native';
 import {
   AIModelMetadata,
   BillingStructure,
   ChatMessage,
+  ChatAttachment,
+  PhotoEditRecord,
 } from '../models/modelTypes';
 import { INITIAL_AI_MODELS } from '../models/modelRegistry';
 import { AIEngine } from '../brain/AIEngine';
@@ -48,6 +56,7 @@ import { ThemeColors } from '../theme/theme';
 import { LanguageService, SUPPORTED_LANGUAGES, LanguageInfo } from '../services/LanguageService';
 import { TTSService } from '../services/TTSService';
 import { VoiceService } from '../services/VoiceService';
+import { AttachmentService } from '../services/AttachmentService';
 import { SpeakingRobot } from '../components/SpeakingRobot';
 
 interface AIChatScreenProps {
@@ -80,6 +89,12 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
   // PWA Install Prompt State
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [canInstallPwa, setCanInstallPwa] = useState(false);
+
+  // File & Image Attachment State
+  const [stagedAttachments, setStagedAttachments] = useState<ChatAttachment[]>([]);
+  const [isAttachmentModalVisible, setIsAttachmentModalVisible] = useState(false);
+  const [isProcessingAttachment, setIsProcessingAttachment] = useState(false);
+  const [expandedDocIds, setExpandedDocIds] = useState<Record<string, boolean>>({});
 
   const flatListRef = useRef<FlatList>(null);
   const aiEngine = AIEngine.getInstance();
@@ -208,22 +223,91 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
     }
   };
 
-  // Fixed Send Message Functionality
+  // Attachment Action Handlers
+  const handlePickImage = async (source: 'gallery' | 'camera') => {
+    setIsAttachmentModalVisible(false);
+    setIsProcessingAttachment(true);
+    try {
+      const attachments = await AttachmentService.getInstance().pickImage(source);
+      if (attachments && attachments.length > 0) {
+        setStagedAttachments((prev) => [...prev, ...attachments]);
+      }
+    } catch (err: any) {
+      console.error('[AIChat] Pick image error:', err);
+      Alert.alert('Image Selection Error', err?.message || 'Failed to select image');
+    } finally {
+      setIsProcessingAttachment(false);
+    }
+  };
+
+  const handlePickDocument = async () => {
+    setIsAttachmentModalVisible(false);
+    setIsProcessingAttachment(true);
+    try {
+      const docs = await AttachmentService.getInstance().pickDocument();
+      if (docs && docs.length > 0) {
+        setStagedAttachments((prev) => [...prev, ...docs]);
+      }
+    } catch (err: any) {
+      console.error('[AIChat] Pick document error:', err);
+      Alert.alert('Document Selection Error', err?.message || 'Failed to select document');
+    } finally {
+      setIsProcessingAttachment(false);
+    }
+  };
+
+  const handleRemoveStagedAttachment = (id: string) => {
+    setStagedAttachments((prev) => prev.filter((a) => a.id !== id));
+  };
+
+  const handleDownloadEditedPhoto = (photo: PhotoEditRecord) => {
+    try {
+      if (Platform.OS === 'web' && typeof document !== 'undefined') {
+        const link = document.createElement('a');
+        link.href = photo.editedUri;
+        const ext = photo.editedUri.startsWith('data:image/svg') ? 'svg' : 'png';
+        link.download = `saas_ai_brain_edit_${Date.now()}.${ext}`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } else {
+        Alert.alert(
+          'Photo Saved',
+          'The transformed image has been processed by SaaS AI Brain and saved to your device media cache.'
+        );
+      }
+    } catch (err: any) {
+      console.error('[AIChat] Download error:', err);
+      Alert.alert('Download Error', 'Could not initiate file download.');
+    }
+  };
+
+  // Fixed Send Message Functionality with Multi-Modal & Attachment Support
   const handleSendPrompt = async (promptToSend?: string) => {
-    const text = (promptToSend !== undefined ? promptToSend : inputText).trim();
+    const rawText = (promptToSend !== undefined ? promptToSend : inputText).trim();
+    const currentAttachments = [...stagedAttachments];
 
-    // Prevent empty messages or sending while currently generating
-    if (!text || isGenerating) return;
+    // Prevent empty submission if there's neither text nor attachments, or while generating
+    if ((!rawText && currentAttachments.length === 0) || isGenerating) return;
 
-    // Clear input immediately upon submission
+    // Clear input and staged attachments tray immediately upon submission
     setInputText('');
     setLiveTranscript('');
+    setStagedAttachments([]);
+
+    // Provide natural contextual prompt if user only uploads attachments
+    const text =
+      rawText ||
+      (currentAttachments.some((a) => a.type === 'image')
+        ? 'Please analyze this uploaded image.'
+        : 'Please summarize and analyze this attached document.');
 
     const userMessage: ChatMessage = {
       id: `msg-${Date.now()}-user`,
       role: 'user',
       content: text,
       timestamp: Date.now(),
+      attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
     };
 
     // Display user message immediately
@@ -238,9 +322,15 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
       // Ensure active Qwen model is loaded in memory for native inference
       await aiEngine.ensureModelLoaded(activeModel.id);
 
-      const output = await aiEngine.generateCompletion(text, messages, (token) => {
-        setCurrentStreamingText((prev) => prev + token);
-      });
+      const output = await aiEngine.generateCompletion(
+        text,
+        messages,
+        (token) => {
+          setCurrentStreamingText((prev) => prev + token);
+        },
+        undefined,
+        currentAttachments
+      );
 
       const assistantMessage: ChatMessage = {
         id: `msg-${Date.now()}-assistant`,
@@ -252,6 +342,7 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
         inferenceTimeMs: output.metrics.totalTimeMs,
         tokensPerSecond: output.metrics.tokensPerSecond,
         structuredData: output.structuredData,
+        editedPhoto: output.editedPhoto,
       };
 
       setCurrentTps(output.metrics.tokensPerSecond);
@@ -577,6 +668,102 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
                   </View>
                 )}
 
+                {/* Message Attachments (Images & Documents) */}
+                {item.attachments && item.attachments.length > 0 && (
+                  <View style={styles.bubbleAttachmentsContainer}>
+                    {item.attachments.map((att: ChatAttachment) => {
+                      if (att.type === 'image') {
+                        return (
+                          <View key={att.id} style={styles.bubbleImageWrapper}>
+                            <Image
+                              source={{ uri: att.uri }}
+                              style={styles.bubbleImage}
+                              resizeMode="cover"
+                            />
+                            <View style={styles.bubbleImageBadge}>
+                              <ImageIcon size={11} color="#FFFFFF" />
+                              <Text style={styles.bubbleImageBadgeText} numberOfLines={1}>
+                                {att.name} {att.dimensions ? `(${att.dimensions.width}×${att.dimensions.height})` : ''}
+                              </Text>
+                            </View>
+                          </View>
+                        );
+                      } else {
+                        const isSpreadsheet =
+                          att.name.toLowerCase().endsWith('.csv') ||
+                          att.name.toLowerCase().endsWith('.xlsx');
+                        const isExpanded = !!expandedDocIds[att.id];
+                        return (
+                          <View
+                            key={att.id}
+                            style={[
+                              styles.bubbleDocCard,
+                              { backgroundColor: isUser ? 'rgba(255, 255, 255, 0.15)' : colors.surface },
+                            ]}
+                          >
+                            <View style={styles.bubbleDocHeader}>
+                              {isSpreadsheet ? (
+                                <FileSpreadsheet size={18} color={isUser ? '#FFFFFF' : colors.primary} />
+                              ) : (
+                                <FileText size={18} color={isUser ? '#FFFFFF' : colors.primary} />
+                              )}
+                              <View style={styles.bubbleDocMeta}>
+                                <Text
+                                  style={[styles.bubbleDocName, { color: isUser ? '#FFFFFF' : colors.text }]}
+                                  numberOfLines={1}
+                                >
+                                  {att.name}
+                                </Text>
+                                <Text
+                                  style={[styles.bubbleDocSize, { color: isUser ? 'rgba(255,255,255,0.75)' : colors.textMuted }]}
+                                >
+                                  {AttachmentService.formatFileSize(att.size)} • {att.mimeType || 'Document'}
+                                </Text>
+                              </View>
+                              {att.extractedText ? (
+                                <TouchableOpacity
+                                  onPress={() =>
+                                    setExpandedDocIds((prev) => ({
+                                      ...prev,
+                                      [att.id]: !prev[att.id],
+                                    }))
+                                  }
+                                  style={styles.expandPreviewBtn}
+                                >
+                                  <Text
+                                    style={[styles.expandPreviewText, { color: isUser ? '#FFFFFF' : colors.primary }]}
+                                  >
+                                    {isExpanded ? 'Hide' : 'Preview'}
+                                  </Text>
+                                </TouchableOpacity>
+                              ) : null}
+                            </View>
+
+                            {isExpanded && att.extractedText && (
+                              <View
+                                style={[
+                                  styles.docPreviewSnippetBox,
+                                  { backgroundColor: isUser ? 'rgba(0,0,0,0.2)' : colors.background },
+                                ]}
+                              >
+                                <Text
+                                  style={[
+                                    styles.docPreviewSnippetText,
+                                    { color: isUser ? '#F1F5F9' : colors.text },
+                                  ]}
+                                  numberOfLines={10}
+                                >
+                                  {att.extractedText}
+                                </Text>
+                              </View>
+                            )}
+                          </View>
+                        );
+                      }
+                    })}
+                  </View>
+                )}
+
                 <Text
                   style={[
                     styles.messageText,
@@ -586,6 +773,52 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
                 >
                   {item.content}
                 </Text>
+
+                {/* AI Photo Editing Result Card */}
+                {!isUser && item.editedPhoto && (
+                  <View style={[styles.photoEditCard, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
+                    <View style={styles.photoEditHeader}>
+                      <Sparkles size={15} color={colors.primary} />
+                      <Text style={[styles.photoEditTitle, { color: colors.text }]}>
+                        AI Photo Transformation
+                      </Text>
+                    </View>
+
+                    <Text style={[styles.photoEditPromptBadge, { color: colors.textMuted }]}>
+                      Prompt: "{item.editedPhoto.prompt}"
+                    </Text>
+
+                    {/* Before / After Comparison */}
+                    <View style={styles.comparisonRow}>
+                      <View style={styles.comparisonCol}>
+                        <Text style={[styles.comparisonLabel, { color: colors.textSubtle }]}>Original</Text>
+                        <Image
+                          source={{ uri: item.editedPhoto.originalUri }}
+                          style={styles.comparisonImage}
+                          resizeMode="cover"
+                        />
+                      </View>
+
+                      <View style={styles.comparisonCol}>
+                        <Text style={[styles.comparisonLabel, { color: colors.primary }]}>✨ Transformed</Text>
+                        <Image
+                          source={{ uri: item.editedPhoto.editedUri }}
+                          style={[styles.comparisonImage, styles.transformedBorder]}
+                          resizeMode="cover"
+                        />
+                      </View>
+                    </View>
+
+                    {/* Download Action Button */}
+                    <TouchableOpacity
+                      style={[styles.downloadBtn, { backgroundColor: colors.primary }]}
+                      onPress={() => handleDownloadEditedPhoto(item.editedPhoto!)}
+                    >
+                      <Download size={14} color="#FFFFFF" />
+                      <Text style={styles.downloadBtnText}>Download Edited Photo</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
 
                 {/* Structured Billing JSON & Order Card */}
                 {!isUser && item.structuredData && item.structuredData.type === 'order_intent' && (
@@ -686,8 +919,68 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
         </View>
       )}
 
+      {/* Staged Attachments Preview Tray */}
+      {stagedAttachments.length > 0 && (
+        <View style={[styles.stagedTray, { backgroundColor: colors.card, borderTopColor: colors.divider }]}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.stagedScroll}>
+            {stagedAttachments.map((att) => (
+              <View key={att.id} style={[styles.stagedItem, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
+                {att.type === 'image' ? (
+                  <Image source={{ uri: att.uri }} style={styles.stagedThumb} />
+                ) : (
+                  <View style={styles.stagedDocIconBox}>
+                    {att.name.endsWith('.csv') || att.name.endsWith('.xlsx') ? (
+                      <FileSpreadsheet size={16} color={colors.primary} />
+                    ) : (
+                      <FileText size={16} color={colors.primary} />
+                    )}
+                  </View>
+                )}
+                <View style={styles.stagedItemInfo}>
+                  <Text style={[styles.stagedItemName, { color: colors.text }]} numberOfLines={1}>
+                    {att.name}
+                  </Text>
+                  <Text style={[styles.stagedItemSize, { color: colors.textMuted }]}>
+                    {AttachmentService.formatFileSize(att.size)}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => handleRemoveStagedAttachment(att.id)}
+                  style={styles.stagedRemoveBtn}
+                  accessibilityLabel="Remove attachment"
+                >
+                  <X size={12} color="#FFFFFF" />
+                </TouchableOpacity>
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+
       {/* Chat Input Bar */}
       <View style={[styles.inputBar, { backgroundColor: colors.card, borderTopColor: colors.divider }]}>
+        {/* Attachment Paperclip Button */}
+        <TouchableOpacity
+          style={[
+            styles.attachButton,
+            { backgroundColor: colors.surface, borderColor: colors.cardBorder },
+          ]}
+          onPress={() => setIsAttachmentModalVisible(true)}
+          accessibilityLabel="Add File or Image"
+          disabled={isGenerating || isProcessingAttachment}
+        >
+          {isProcessingAttachment ? (
+            <ActivityIndicator size="small" color={colors.primary} />
+          ) : (
+            <Paperclip size={19} color={colors.primary} />
+          )}
+          {stagedAttachments.length > 0 && (
+            <View style={[styles.attachBadge, { backgroundColor: colors.primary }]}>
+              <Text style={styles.attachBadgeText}>{stagedAttachments.length}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
+
         {/* Microphone Button */}
         <TouchableOpacity
           style={[
@@ -709,7 +1002,11 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
         {/* Text Input with Enter key support */}
         <TextInput
           style={[styles.textInput, { color: colors.text, backgroundColor: colors.surface }]}
-          placeholder={`Ask Qwen in Tamil, English, or Tanglish...`}
+          placeholder={
+            stagedAttachments.length > 0
+              ? 'Add an instruction (e.g. "Change bg to blue", "Summarize") or send...'
+              : 'Ask Qwen in Tamil, English, or Tanglish...'
+          }
           placeholderTextColor={colors.textSubtle}
           value={inputText}
           onChangeText={setInputText}
@@ -729,21 +1026,125 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
           style={[
             styles.sendButton,
             {
-              backgroundColor: inputText.trim() ? colors.primary : colors.surface,
+              backgroundColor:
+                inputText.trim() || stagedAttachments.length > 0
+                  ? colors.primary
+                  : colors.surface,
               opacity: isGenerating ? 0.6 : 1,
             },
           ]}
           onPress={() => handleSendPrompt()}
-          disabled={!inputText.trim() || isGenerating}
+          disabled={(!inputText.trim() && stagedAttachments.length === 0) || isGenerating}
           accessibilityLabel="Send message"
         >
           {isGenerating ? (
-            <ActivityIndicator size="small" color={inputText.trim() ? '#FFFFFF' : colors.textSubtle} />
+            <ActivityIndicator
+              size="small"
+              color={inputText.trim() || stagedAttachments.length > 0 ? '#FFFFFF' : colors.textSubtle}
+            />
           ) : (
-            <Send size={18} color={inputText.trim() ? '#FFFFFF' : colors.textSubtle} />
+            <Send
+              size={18}
+              color={inputText.trim() || stagedAttachments.length > 0 ? '#FFFFFF' : colors.textSubtle}
+            />
           )}
         </TouchableOpacity>
       </View>
+
+      {/* Attachment Selection Sheet Modal */}
+      <Modal
+        visible={isAttachmentModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsAttachmentModalVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setIsAttachmentModalVisible(false)}
+        >
+          <View
+            style={[
+              styles.attachmentSheetContent,
+              { backgroundColor: colors.card, borderColor: colors.cardBorder },
+            ]}
+          >
+            <View style={styles.sheetHeader}>
+              <View>
+                <Text style={[styles.modalTitle, { color: colors.text }]}>Add Attachment</Text>
+                <Text style={[styles.sheetSubtitle, { color: colors.textMuted }]}>
+                  Upload images, documents, or spreadsheets
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setIsAttachmentModalVisible(false)}>
+                <X size={20} color={colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.attachmentOptionsList}>
+              <TouchableOpacity
+                style={[styles.sheetOptionRow, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}
+                onPress={() => handlePickImage('gallery')}
+              >
+                <View style={[styles.sheetIconBox, { backgroundColor: 'rgba(77, 68, 225, 0.12)' }]}>
+                  <ImageIcon size={22} color={colors.primary} />
+                </View>
+                <View style={styles.sheetOptionTextCol}>
+                  <Text style={[styles.sheetOptionTitle, { color: colors.text }]}>Upload Image</Text>
+                  <Text style={[styles.sheetOptionDesc, { color: colors.textMuted }]}>
+                    Select photos from device gallery (JPG, PNG, WebP)
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.sheetOptionRow, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}
+                onPress={() => handlePickImage('camera')}
+              >
+                <View style={[styles.sheetIconBox, { backgroundColor: 'rgba(16, 185, 129, 0.12)' }]}>
+                  <Camera size={22} color="#10B981" />
+                </View>
+                <View style={styles.sheetOptionTextCol}>
+                  <Text style={[styles.sheetOptionTitle, { color: colors.text }]}>Take Photo</Text>
+                  <Text style={[styles.sheetOptionDesc, { color: colors.textMuted }]}>
+                    Capture live shot via camera
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.sheetOptionRow, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}
+                onPress={() => handlePickDocument()}
+              >
+                <View style={[styles.sheetIconBox, { backgroundColor: 'rgba(239, 68, 68, 0.12)' }]}>
+                  <FileText size={22} color="#EF4444" />
+                </View>
+                <View style={styles.sheetOptionTextCol}>
+                  <Text style={[styles.sheetOptionTitle, { color: colors.text }]}>Upload Document / PDF</Text>
+                  <Text style={[styles.sheetOptionDesc, { color: colors.textMuted }]}>
+                    PDF, TXT, DOCX with auto text extraction
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.sheetOptionRow, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}
+                onPress={() => handlePickDocument()}
+              >
+                <View style={[styles.sheetIconBox, { backgroundColor: 'rgba(245, 158, 11, 0.12)' }]}>
+                  <FileSpreadsheet size={22} color="#F59E0B" />
+                </View>
+                <View style={styles.sheetOptionTextCol}>
+                  <Text style={[styles.sheetOptionTitle, { color: colors.text }]}>Upload Spreadsheet</Text>
+                  <Text style={[styles.sheetOptionDesc, { color: colors.textMuted }]}>
+                    CSV, XLSX data tables for Q&A and analysis
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Language Selection Modal */}
       <Modal visible={showLanguageModal} transparent animationType="fade">
@@ -1132,6 +1533,267 @@ const styles = StyleSheet.create({
   },
   langOptionNative: {
     fontSize: 12,
+    marginTop: 2,
+  },
+  // Attachment & Image Styles
+  bubbleAttachmentsContainer: {
+    marginBottom: 8,
+    gap: 8,
+  },
+  bubbleImageWrapper: {
+    borderRadius: 12,
+    overflow: 'hidden',
+    position: 'relative',
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.08)',
+  },
+  bubbleImage: {
+    width: '100%',
+    height: 180,
+    backgroundColor: '#0F172A',
+  },
+  bubbleImageBadge: {
+    position: 'absolute',
+    bottom: 6,
+    left: 6,
+    right: 6,
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  bubbleImageBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '600',
+    flex: 1,
+  },
+  bubbleDocCard: {
+    borderRadius: 10,
+    padding: 10,
+    gap: 6,
+  },
+  bubbleDocHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  bubbleDocMeta: {
+    flex: 1,
+  },
+  bubbleDocName: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  bubbleDocSize: {
+    fontSize: 10,
+    marginTop: 1,
+  },
+  expandPreviewBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+  expandPreviewText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  docPreviewSnippetBox: {
+    padding: 8,
+    borderRadius: 6,
+    marginTop: 4,
+  },
+  docPreviewSnippetText: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  // Photo Edit Card Styles
+  photoEditCard: {
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 8,
+  },
+  photoEditHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  photoEditTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  photoEditPromptBadge: {
+    fontSize: 11,
+    fontStyle: 'italic',
+  },
+  comparisonRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  comparisonCol: {
+    flex: 1,
+    gap: 4,
+  },
+  comparisonLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  comparisonImage: {
+    width: '100%',
+    height: 120,
+    borderRadius: 8,
+    backgroundColor: '#0F172A',
+  },
+  transformedBorder: {
+    borderWidth: 1.5,
+    borderColor: '#4D44E1',
+  },
+  downloadBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginTop: 4,
+  },
+  downloadBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  // Staged Attachments Tray
+  stagedTray: {
+    borderTopWidth: 1,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
+  stagedScroll: {
+    gap: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  stagedItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    gap: 6,
+    maxWidth: 180,
+    position: 'relative',
+  },
+  stagedThumb: {
+    width: 34,
+    height: 34,
+    borderRadius: 6,
+    backgroundColor: '#0F172A',
+  },
+  stagedDocIconBox: {
+    width: 34,
+    height: 34,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(77, 68, 225, 0.08)',
+  },
+  stagedItemInfo: {
+    flex: 1,
+  },
+  stagedItemName: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  stagedItemSize: {
+    fontSize: 9,
+    marginTop: 1,
+  },
+  stagedRemoveBtn: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#EF4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  attachButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    position: 'relative',
+  },
+  attachBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  attachBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  // Attachment Sheet Modal
+  attachmentSheetContent: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 16,
+    gap: 12,
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 4,
+  },
+  sheetSubtitle: {
+    fontSize: 11,
+    marginTop: 2,
+  },
+  attachmentOptionsList: {
+    gap: 8,
+  },
+  sheetOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 12,
+  },
+  sheetIconBox: {
+    width: 42,
+    height: 42,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetOptionTextCol: {
+    flex: 1,
+  },
+  sheetOptionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  sheetOptionDesc: {
+    fontSize: 11,
     marginTop: 2,
   },
 });

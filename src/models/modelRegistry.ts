@@ -97,6 +97,38 @@ export const INITIAL_AI_MODELS: AIModelMetadata[] = [
     ],
     recommendedFor: ['accuracy', 'overall'],
   },
+  {
+    id: 'qwen2-vl-2b',
+    name: 'Qwen2-VL 2B (Vision)',
+    subtitle: 'Multimodal Vision-Language Edge Model · Q4_K_M',
+    family: 'Qwen',
+    parameters: '2.2B (Vision + Text)',
+    quantization: 'Q4_K_M + mmproj',
+    fileSizeMB: 1420,
+    downloadSizeMB: 1420,
+    minPhysicalRAMGB: 4.0,
+    recommendedAvailableRAMGB: 2.5,
+    minStorageMB: 1800,
+    contextWindow: 4096,
+    speedRating: 3,
+    accuracyRating: 5,
+    memoryEfficiencyRating: 3,
+    downloadUrl:
+      'https://huggingface.co/Qwen/Qwen2-VL-2B-Instruct-GGUF/resolve/main/qwen2-vl-2b-instruct-q4_k_m.gguf',
+    fileName: 'qwen2-vl-2b-instruct-q4_k_m.gguf',
+    sha256Checksum: 'e89d12ef84a3cb49a37bc3848b5774a3f89e2cf486e969248db6e5f38a5369bb',
+    description:
+      'Official multimodal vision-language model. Capable of visual reasoning, image Q&A, receipt OCR, and object identification directly on-device.',
+    license: 'Apache 2.0',
+    tags: ['Vision AI', 'Multimodal', 'OCR', 'Image Understanding'],
+    strengths: [
+      'Genuine multimodal image understanding and text extraction',
+      'Understands receipts, barcodes, product photos, and diagrams',
+      'Combines visual tokens with conversational Qwen reasoning',
+      'Hardware-accelerated via llama.rn multimodal projector',
+    ],
+    recommendedFor: ['accuracy'],
+  },
 ];
 
 export function getModelById(id: string): AIModelMetadata | undefined {

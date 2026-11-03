@@ -120,6 +120,26 @@ export interface BenchmarkResult {
   }[];
 }
 
+export interface ChatAttachment {
+  id: string;
+  type: 'image' | 'document';
+  name: string;
+  size: number; // in bytes
+  mimeType: string;
+  uri: string;
+  base64?: string;
+  extractedText?: string;
+  previewUrl?: string;
+  dimensions?: { width: number; height: number };
+}
+
+export interface PhotoEditRecord {
+  originalUri: string;
+  editedUri: string;
+  prompt: string;
+  timestamp: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -130,6 +150,8 @@ export interface ChatMessage {
   inferenceTimeMs?: number;
   tokensPerSecond?: number;
   structuredData?: BillingStructure | null;
+  attachments?: ChatAttachment[];
+  editedPhoto?: PhotoEditRecord;
 }
 
 export interface BillingItem {
