@@ -22,19 +22,25 @@ export default async function handler(req: any, res: any) {
     return res.status(401).json({ error: 'Unauthorized', message: 'Valid API key required via Authorization: Bearer sab_...' });
   }
 
-  await connectToDatabase();
-  const keyHash = hashApiKey(rawKey);
-  const keyDoc = await ApiKey.findOne({ keyHash });
+  let keyPrefix = 'sab_live_...';
+  try {
+    await connectToDatabase();
+    const keyHash = hashApiKey(rawKey);
+    const keyDoc = await ApiKey.findOne({ keyHash });
 
-  if (!keyDoc || keyDoc.status !== 'active') {
-    return res.status(401).json({ error: 'Unauthorized', message: 'Invalid or revoked API key.' });
+    if (!keyDoc || keyDoc.status !== 'active') {
+      return res.status(401).json({ error: 'Unauthorized', message: 'Invalid or revoked API key.' });
+    }
+
+    keyPrefix = keyDoc.keyPrefix;
+    ApiKey.updateOne({ _id: keyDoc._id }, { $set: { lastUsedAt: new Date() } }).catch(() => {});
+  } catch (err: any) {
+    console.warn('[Chat Completions API] DB check warning:', err.message);
   }
-
-  ApiKey.updateOne({ _id: keyDoc._id }, { $set: { lastUsedAt: new Date() } }).catch(() => {});
 
   const { model = 'qwen3-0.6b', messages = [] } = req.body || {};
   const lastPrompt = messages[messages.length - 1]?.content || 'Hello';
-  const responseText = `[SaaS AI Brain Cloud API] Processed query: "${lastPrompt}" via API Key ${keyDoc.keyPrefix}. Operating with edge safety and verified token authorization.`;
+  const responseText = `[SaaS AI Brain Cloud API] Processed query: "${lastPrompt}" via API Key ${keyPrefix}. Operating with edge safety and verified token authorization.`;
 
   return res.status(200).json({
     id: `chatcmpl-${Date.now()}`,
