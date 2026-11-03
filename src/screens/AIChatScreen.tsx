@@ -10,6 +10,8 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  Modal,
+  ScrollView,
 } from 'react-native';
 import {
   Send,
@@ -21,6 +23,15 @@ import {
   RotateCcw,
   Cpu,
   Trash2,
+  Mic,
+  MicOff,
+  Volume2,
+  VolumeX,
+  Square,
+  Languages,
+  Radio,
+  X,
+  Headphones,
 } from 'lucide-react-native';
 import {
   AIModelMetadata,
@@ -31,6 +42,9 @@ import { AIEngine } from '../brain/AIEngine';
 import { ModelStorage } from '../storage/ModelStorage';
 import { Header } from '../components/Header';
 import { ThemeColors } from '../theme/theme';
+import { LanguageService, SUPPORTED_LANGUAGES, LanguageInfo } from '../services/LanguageService';
+import { TTSService } from '../services/TTSService';
+import { VoiceService } from '../services/VoiceService';
 
 interface AIChatScreenProps {
   selectedModel: AIModelMetadata | null;
@@ -49,29 +63,46 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
   const [currentStreamingText, setCurrentStreamingText] = useState('');
   const [currentTps, setCurrentTps] = useState<number | null>(null);
 
+  // Voice & TTS State
+  const [isListening, setIsListening] = useState(false);
+  const [liveTranscript, setLiveTranscript] = useState('');
+  const [continuousMode, setContinuousMode] = useState(false);
+  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
+  const [speechSpeed, setSpeechSpeed] = useState<number>(1.0);
+  const [selectedLanguage, setSelectedLanguage] = useState<LanguageInfo>(SUPPORTED_LANGUAGES[0]);
+  const [showLanguageModal, setShowLanguageModal] = useState(false);
+
   const flatListRef = useRef<FlatList>(null);
   const aiEngine = AIEngine.getInstance();
   const storage = ModelStorage.getInstance();
+  const languageService = LanguageService.getInstance();
+  const ttsService = TTSService.getInstance();
+  const voiceService = VoiceService.getInstance();
+
+  const continuousModeRef = useRef(continuousMode);
+  continuousModeRef.current = continuousMode;
 
   const QUICK_EXAMPLES = [
-    'Hello, introduce yourself.',
+    'Enakku artificial intelligence pathi sollu.',
+    'இந்தியாவின் தலைநகரம் என்ன?',
     'Rendu Pepsi add pannu.',
-    'Oru Coke add pannu.',
-    'Moonu water bottle add pannu.',
     'Explain inventory management.',
+    'Hello, introduce yourself.',
+    'Bharat ki rajdhani kya hai?',
   ];
+
+  const SPEECH_SPEEDS = [0.75, 1.0, 1.25, 1.5];
 
   useEffect(() => {
     storage.getChatHistory().then((history) => {
       if (history.length > 0) {
         setMessages(history);
       } else {
-        // Initial welcome message
         const welcomeMsg: ChatMessage = {
           id: 'msg-welcome',
           role: 'assistant',
           content:
-            "Hello! I am SaaS AI Brain running 100% locally on your phone's hardware. You can test general queries, Tamil/Tanglish billing commands, or inventory questions below.",
+            "Vanakkam! I am SaaS AI Brain running 100% locally on your device. You can speak or type in any language: Tamil, English, Tanglish, Hindi, Hinglish, Telugu, Malayalam, and more.",
           timestamp: Date.now(),
           modelId: selectedModel?.id,
           modelName: selectedModel?.name || 'Local SLM',
@@ -79,7 +110,66 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
         setMessages([welcomeMsg]);
       }
     });
+
+    return () => {
+      ttsService.stop();
+      voiceService.stopListening();
+    };
   }, []);
+
+  // Handle Speech Recognition Result
+  const startRecording = async () => {
+    if (ttsService.isSpeaking()) {
+      await ttsService.stop();
+      setSpeakingMessageId(null);
+    }
+
+    setLiveTranscript('');
+    setIsListening(true);
+
+    await voiceService.startListening({
+      language: selectedLanguage.bcp47,
+      continuous: continuousModeRef.current,
+      onStart: () => {
+        setIsListening(true);
+      },
+      onResult: (transcript, isFinal) => {
+        setLiveTranscript(transcript);
+        setInputText(transcript);
+        if (isFinal && continuousModeRef.current && transcript.trim().length > 2) {
+          stopRecordingAndSend(transcript);
+        }
+      },
+      onError: (errMsg) => {
+        setIsListening(false);
+        Alert.alert('Voice Recognition', errMsg);
+      },
+      onEnd: () => {
+        setIsListening(false);
+      },
+    });
+  };
+
+  const stopRecording = async () => {
+    await voiceService.stopListening();
+    setIsListening(false);
+  };
+
+  const cancelRecording = async () => {
+    await voiceService.cancelListening();
+    setIsListening(false);
+    setLiveTranscript('');
+  };
+
+  const stopRecordingAndSend = async (textToSend?: string) => {
+    await voiceService.stopListening();
+    setIsListening(false);
+    const toSend = textToSend || liveTranscript || inputText;
+    setLiveTranscript('');
+    if (toSend.trim()) {
+      handleSendPrompt(toSend);
+    }
+  };
 
   const handleSendPrompt = async (promptToSend?: string) => {
     const text = (promptToSend || inputText).trim();
@@ -94,6 +184,7 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
     }
 
     setInputText('');
+    setLiveTranscript('');
 
     const userMessage: ChatMessage = {
       id: `msg-${Date.now()}-user`,
@@ -129,12 +220,62 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
       setCurrentTps(output.metrics.tokensPerSecond);
       setMessages((prev) => [...prev, assistantMessage]);
       await storage.saveChatMessage(assistantMessage);
+
+      // In continuous voice conversation mode, automatically read response aloud and resume listening
+      if (continuousModeRef.current) {
+        handlePlayTTS(assistantMessage, true);
+      }
     } catch (err: any) {
       Alert.alert('Inference Notice', err?.message || 'Failed generating inference');
     } finally {
       setIsGenerating(false);
       setCurrentStreamingText('');
     }
+  };
+
+  // Text-to-Speech handler
+  const handlePlayTTS = async (item: ChatMessage, triggerContinuousListen = false) => {
+    if (speakingMessageId === item.id) {
+      // Toggle stop if already speaking this message
+      await ttsService.stop();
+      setSpeakingMessageId(null);
+      return;
+    }
+
+    setSpeakingMessageId(item.id);
+
+    // Stop microphone to prevent loop feedback
+    if (isListening) {
+      await voiceService.stopListening();
+      setIsListening(false);
+    }
+
+    const detected = languageService.detectLanguage(item.content);
+
+    await ttsService.speakMessage(item.id, item.content, {
+      rate: speechSpeed,
+      language: detected.bcp47,
+      onStart: () => {
+        setSpeakingMessageId(item.id);
+      },
+      onDone: () => {
+        setSpeakingMessageId(null);
+        // If continuous mode is enabled, start listening for user's next utterance after speech finishes
+        if (triggerContinuousListen && continuousModeRef.current) {
+          setTimeout(() => {
+            if (continuousModeRef.current) {
+              startRecording();
+            }
+          }, 350);
+        }
+      },
+      onStopped: () => {
+        setSpeakingMessageId(null);
+      },
+      onError: () => {
+        setSpeakingMessageId(null);
+      },
+    });
   };
 
   const handleConfirmOrder = (order: BillingStructure) => {
@@ -145,8 +286,25 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
   };
 
   const handleClearChat = async () => {
+    await ttsService.stop();
+    await voiceService.stopListening();
+    setSpeakingMessageId(null);
+    setIsListening(false);
     await storage.clearChatHistory();
     setMessages([]);
+  };
+
+  const toggleContinuousMode = () => {
+    const nextVal = !continuousMode;
+    setContinuousMode(nextVal);
+    continuousModeRef.current = nextVal;
+    if (nextVal) {
+      startRecording();
+    } else {
+      stopRecording();
+      ttsService.stop();
+      setSpeakingMessageId(null);
+    }
   };
 
   return (
@@ -155,11 +313,32 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <Header
-        title="Local AI Chat"
-        subtitle={selectedModel ? `Running on ${selectedModel.name}` : 'No model loaded'}
+        title="Multilingual AI Voice Brain"
+        subtitle={selectedModel ? `Active: ${selectedModel.name}` : 'No model loaded'}
         colors={colors}
         rightAction={
           <View style={styles.headerRightActions}>
+            {/* Continuous Voice Conversation Toggle */}
+            <TouchableOpacity
+              onPress={toggleContinuousMode}
+              style={[
+                styles.voiceModeBtn,
+                continuousMode
+                  ? { backgroundColor: '#EF4444' }
+                  : { backgroundColor: colors.surface, borderColor: colors.cardBorder },
+              ]}
+            >
+              <Headphones size={14} color={continuousMode ? '#FFFFFF' : colors.primary} />
+              <Text
+                style={[
+                  styles.voiceModeText,
+                  { color: continuousMode ? '#FFFFFF' : colors.text },
+                ]}
+              >
+                {continuousMode ? 'Live Voice' : 'Voice Mode'}
+              </Text>
+            </TouchableOpacity>
+
             <TouchableOpacity onPress={onOpenModelSelector} style={styles.modelSwitchPill}>
               <Cpu size={14} color={colors.primary} />
               <Text style={[styles.modelSwitchText, { color: colors.primary }]}>
@@ -173,6 +352,40 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
           </View>
         }
       />
+
+      {/* Voice Assistant Toolbar: Language, Speech Speed & Indicators */}
+      <View style={[styles.voiceToolbar, { backgroundColor: colors.surface, borderBottomColor: colors.divider }]}>
+        <TouchableOpacity
+          style={[styles.toolPill, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+          onPress={() => setShowLanguageModal(true)}
+        >
+          <Languages size={13} color={colors.primary} />
+          <Text style={[styles.toolPillText, { color: colors.text }]}>
+            {selectedLanguage.name} ({selectedLanguage.nativeName})
+          </Text>
+        </TouchableOpacity>
+
+        {/* Speech Speed Cycle */}
+        <TouchableOpacity
+          style={[styles.toolPill, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+          onPress={() => {
+            const nextIdx = (SPEECH_SPEEDS.indexOf(speechSpeed) + 1) % SPEECH_SPEEDS.length;
+            setSpeechSpeed(SPEECH_SPEEDS[nextIdx]);
+          }}
+        >
+          <Volume2 size={13} color={colors.primary} />
+          <Text style={[styles.toolPillText, { color: colors.text }]}>
+            Speed {speechSpeed}x
+          </Text>
+        </TouchableOpacity>
+
+        {speakingMessageId && (
+          <View style={styles.speakingIndicator}>
+            <Radio size={12} color="#10B981" />
+            <Text style={styles.speakingIndicatorText}>Speaking</Text>
+          </View>
+        )}
+      </View>
 
       {/* Quick Example Prompt Chips */}
       <View style={[styles.examplesBar, { borderBottomColor: colors.divider }]}>
@@ -202,6 +415,8 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
         onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
         renderItem={({ item }) => {
           const isUser = item.role === 'user';
+          const isThisSpeaking = speakingMessageId === item.id;
+          const detectedLang = !isUser ? languageService.detectLanguage(item.content) : null;
 
           return (
             <View
@@ -219,22 +434,49 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
                         styles.assistantBubble,
                         {
                           backgroundColor: colors.card,
-                          borderColor: colors.cardBorder,
+                          borderColor: isThisSpeaking ? colors.primary : colors.cardBorder,
+                          borderWidth: isThisSpeaking ? 2 : 1,
                         },
                       ],
                 ]}
               >
-                {!isUser && item.modelName && (
-                  <View style={styles.modelTagRow}>
-                    <Sparkles size={11} color={colors.primary} />
-                    <Text style={[styles.modelTagText, { color: colors.primary }]}>
-                      {item.modelName}
-                    </Text>
-                    {item.tokensPerSecond && (
-                      <Text style={[styles.tpsTagText, { color: colors.textSubtle }]}>
-                        · {item.tokensPerSecond} tps
+                {!isUser && (
+                  <View style={styles.assistantHeaderRow}>
+                    <View style={styles.modelTagRow}>
+                      <Sparkles size={11} color={colors.primary} />
+                      <Text style={[styles.modelTagText, { color: colors.primary }]}>
+                        {item.modelName || 'Local SLM'}
                       </Text>
-                    )}
+                      {item.tokensPerSecond && (
+                        <Text style={[styles.tpsTagText, { color: colors.textSubtle }]}>
+                          · {item.tokensPerSecond} tps
+                        </Text>
+                      )}
+                      {detectedLang && (
+                        <View style={[styles.langBadge, { backgroundColor: colors.primarySubtle }]}>
+                          <Text style={[styles.langBadgeText, { color: colors.primary }]}>
+                            {detectedLang.name}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+
+                    {/* Speaker Read Aloud Button */}
+                    <TouchableOpacity
+                      onPress={() => handlePlayTTS(item)}
+                      style={[
+                        styles.speakerBtn,
+                        isThisSpeaking
+                          ? { backgroundColor: '#EF4444' }
+                          : { backgroundColor: colors.surface },
+                      ]}
+                    >
+                      {isThisSpeaking ? (
+                        <Square size={13} color="#FFFFFF" />
+                      ) : (
+                        <Volume2 size={13} color={colors.primary} />
+                      )}
+                    </TouchableOpacity>
                   </View>
                 )}
 
@@ -271,7 +513,7 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
                     <View style={styles.securityNoteRow}>
                       <ShieldCheck size={12} color={colors.success} />
                       <Text style={[styles.securityText, { color: colors.textMuted }]}>
-                        Security: AI cannot auto-execute payments or prices without validation.
+                        Security: AI cannot auto-execute payments without validation.
                       </Text>
                     </View>
 
@@ -312,11 +554,62 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
         </View>
       )}
 
-      {/* Input Box */}
+      {/* Live Voice Recording Overlay Banner */}
+      {isListening && (
+        <View style={[styles.listeningBanner, { backgroundColor: colors.card, borderColor: colors.primary }]}>
+          <View style={styles.listeningStatusRow}>
+            <View style={styles.pulsingMicDot} />
+            <Text style={[styles.listeningTitle, { color: colors.text }]}>
+              Listening ({selectedLanguage.name})...
+            </Text>
+          </View>
+          <Text style={[styles.liveTranscriptText, { color: colors.textMuted }]} numberOfLines={2}>
+            {liveTranscript || 'Speak now in ' + selectedLanguage.nativeName + '...'}
+          </Text>
+          <View style={styles.listeningControlsRow}>
+            <TouchableOpacity onPress={cancelRecording} style={[styles.liveCtrlBtn, { backgroundColor: colors.surface }]}>
+              <X size={14} color={colors.error} />
+              <Text style={[styles.liveCtrlText, { color: colors.error }]}>Cancel</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity onPress={stopRecording} style={[styles.liveCtrlBtn, { backgroundColor: colors.surface }]}>
+              <Square size={14} color={colors.text} />
+              <Text style={[styles.liveCtrlText, { color: colors.text }]}>Stop</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => stopRecordingAndSend()}
+              style={[styles.liveCtrlBtn, { backgroundColor: colors.primary }]}
+            >
+              <Send size={14} color="#FFFFFF" />
+              <Text style={[styles.liveCtrlText, { color: '#FFFFFF' }]}>Send</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* Input Bar */}
       <View style={[styles.inputBar, { backgroundColor: colors.card, borderTopColor: colors.divider }]}>
+        {/* Microphone Button */}
+        <TouchableOpacity
+          style={[
+            styles.micButton,
+            isListening
+              ? { backgroundColor: '#EF4444' }
+              : { backgroundColor: colors.primary },
+          ]}
+          onPress={isListening ? stopRecording : startRecording}
+        >
+          {isListening ? (
+            <MicOff size={20} color="#FFFFFF" />
+          ) : (
+            <Mic size={20} color="#FFFFFF" />
+          )}
+        </TouchableOpacity>
+
         <TextInput
           style={[styles.textInput, { color: colors.text, backgroundColor: colors.surface }]}
-          placeholder="Ask in English or Tanglish ('Rendu Pepsi add pannu')..."
+          placeholder={`Speak or type in ${selectedLanguage.nativeName}...`}
           placeholderTextColor={colors.textSubtle}
           value={inputText}
           onChangeText={setInputText}
@@ -337,6 +630,55 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
           <Send size={18} color={inputText.trim() ? '#FFFFFF' : colors.textSubtle} />
         </TouchableOpacity>
       </View>
+
+      {/* Language Selection Modal */}
+      <Modal visible={showLanguageModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>Select Voice Language</Text>
+              <TouchableOpacity onPress={() => setShowLanguageModal(false)}>
+                <X size={20} color={colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalList}>
+              {SUPPORTED_LANGUAGES.map((lang) => {
+                const isSelected = selectedLanguage.code === lang.code;
+                return (
+                  <TouchableOpacity
+                    key={lang.code}
+                    style={[
+                      styles.langOption,
+                      isSelected ? { backgroundColor: colors.primarySubtle } : {},
+                    ]}
+                    onPress={() => {
+                      setSelectedLanguage(lang);
+                      voiceService.setLanguage(lang);
+                      setShowLanguageModal(false);
+                    }}
+                  >
+                    <View>
+                      <Text
+                        style={[
+                          styles.langOptionName,
+                          { color: isSelected ? colors.primary : colors.text },
+                        ]}
+                      >
+                        {lang.name}
+                      </Text>
+                      <Text style={[styles.langOptionNative, { color: colors.textMuted }]}>
+                        {lang.nativeName}
+                      </Text>
+                    </View>
+                    {isSelected && <Check size={18} color={colors.primary} />}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 };
@@ -348,7 +690,20 @@ const styles = StyleSheet.create({
   headerRightActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
+  },
+  voiceModeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 14,
+    borderWidth: 1,
+  },
+  voiceModeText: {
+    fontSize: 11,
+    fontWeight: '700',
   },
   modelSwitchPill: {
     flexDirection: 'row',
@@ -356,9 +711,8 @@ const styles = StyleSheet.create({
     gap: 4,
     paddingHorizontal: 8,
     paddingVertical: 5,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#4D44E1',
+    borderRadius: 14,
+    backgroundColor: '#EEF0FD',
   },
   modelSwitchText: {
     fontSize: 11,
@@ -367,41 +721,76 @@ const styles = StyleSheet.create({
   clearBtn: {
     padding: 6,
   },
+  voiceToolbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    gap: 8,
+    borderBottomWidth: 1,
+  },
+  toolPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  toolPillText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  speakingIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginLeft: 'auto',
+    backgroundColor: '#D1FAE5',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+  },
+  speakingIndicatorText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#065F46',
+  },
   examplesBar: {
-    paddingVertical: 8,
     borderBottomWidth: 1,
   },
   examplesList: {
-    paddingHorizontal: 16,
-    gap: 8,
-  },
-  exampleChip: {
     paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 16,
+    gap: 6,
+  },
+  exampleChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
   },
   exampleText: {
     fontSize: 11,
     fontWeight: '500',
   },
   messagesContainer: {
-    padding: 16,
-    paddingBottom: 24,
+    padding: 12,
+    paddingBottom: 20,
     gap: 12,
   },
   messageWrapper: {
-    flexDirection: 'row',
-    width: '100%',
+    marginVertical: 4,
+    maxWidth: '85%',
   },
   userWrapper: {
-    justifyContent: 'flex-end',
+    alignSelf: 'flex-end',
   },
   assistantWrapper: {
-    justifyContent: 'flex-start',
+    alignSelf: 'flex-start',
   },
   messageBubble: {
-    maxWidth: '85%',
-    padding: 14,
+    padding: 12,
     borderRadius: 16,
   },
   userBubble: {
@@ -411,11 +800,18 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 4,
     borderWidth: 1,
   },
+  assistantHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+    gap: 8,
+  },
   modelTagRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    marginBottom: 6,
+    gap: 5,
+    flexWrap: 'wrap',
   },
   modelTagText: {
     fontSize: 11,
@@ -424,15 +820,28 @@ const styles = StyleSheet.create({
   tpsTagText: {
     fontSize: 10,
   },
+  langBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 8,
+  },
+  langBadgeText: {
+    fontSize: 9,
+    fontWeight: '700',
+  },
+  speakerBtn: {
+    padding: 5,
+    borderRadius: 12,
+  },
   messageText: {
     fontSize: 14,
     lineHeight: 20,
   },
   structuredCard: {
-    padding: 12,
-    borderRadius: 12,
     marginTop: 10,
-    gap: 8,
+    padding: 10,
+    borderRadius: 10,
+    gap: 6,
   },
   structuredHeader: {
     flexDirection: 'row',
@@ -446,33 +855,30 @@ const styles = StyleSheet.create({
   orderItemRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: 4,
+    paddingVertical: 2,
   },
   orderItemName: {
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 12,
   },
   orderItemPrice: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
   },
   securityNoteRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginTop: 2,
+    gap: 4,
+    marginTop: 4,
   },
   securityText: {
     fontSize: 10,
-    flex: 1,
-    lineHeight: 14,
   },
   confirmOrderBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    paddingVertical: 8,
+    paddingVertical: 7,
     borderRadius: 8,
     marginTop: 4,
   },
@@ -482,35 +888,129 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   streamingWrapper: {
-    paddingHorizontal: 16,
-    paddingBottom: 8,
+    paddingHorizontal: 12,
+    marginBottom: 8,
   },
   streamingBubble: {
-    padding: 14,
+    padding: 12,
     borderRadius: 16,
     borderWidth: 1,
+    gap: 6,
+  },
+  listeningBanner: {
+    marginHorizontal: 12,
+    marginBottom: 6,
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    gap: 6,
+  },
+  listeningStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  pulsingMicDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#EF4444',
+  },
+  listeningTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  liveTranscriptText: {
+    fontSize: 13,
+    fontStyle: 'italic',
+  },
+  listeningControlsRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+    marginTop: 4,
+  },
+  liveCtrlBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  liveCtrlText: {
+    fontSize: 11,
+    fontWeight: '700',
   },
   inputBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 12,
-    gap: 10,
+    padding: 10,
+    gap: 8,
     borderTopWidth: 1,
+  },
+  micButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   textInput: {
     flex: 1,
-    minHeight: 44,
-    maxHeight: 120,
-    borderRadius: 22,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    minHeight: 40,
+    maxHeight: 100,
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     fontSize: 14,
   },
   sendButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    borderRadius: 16,
+    maxHeight: '75%',
+    borderWidth: 1,
+    padding: 16,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  modalList: {
+    marginTop: 4,
+  },
+  langOption: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+  },
+  langOptionName: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  langOptionNative: {
+    fontSize: 12,
+    marginTop: 2,
   },
 });

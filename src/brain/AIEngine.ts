@@ -1,5 +1,6 @@
 import { BillingStructure, ChatMessage } from '../models/modelTypes';
 import { getModelById } from '../models/modelRegistry';
+import { LanguageService } from '../services/LanguageService';
 
 // We dynamically require llama.rn to gracefully support both native environment and expo web/simulator
 let llamaRnModule: any = null;
@@ -102,7 +103,7 @@ export class AIEngine {
   public async generateCompletion(
     userPrompt: string,
     onToken?: TokenCallback,
-    systemPrompt = 'You are SaaS AI Brain, a smart on-device AI assistant with support for English, Tamil, and Tanglish. Provide concise, helpful answers.'
+    customSystemPrompt?: string
   ): Promise<{ text: string; metrics: InferenceMetrics; structuredData: BillingStructure | null }> {
     if (!this.currentContext) {
       throw new Error('No AI model is loaded in memory. Please select and download a model first.');
@@ -117,6 +118,11 @@ export class AIEngine {
     let firstTokenTime = 0;
     let tokenCount = 0;
     let fullResponse = '';
+
+    const langInfo = LanguageService.getInstance().detectLanguage(userPrompt);
+    const systemPrompt =
+      customSystemPrompt ||
+      `You are SaaS AI Brain, a smart multilingual on-device AI assistant. The user is speaking in ${langInfo.name} (${langInfo.code}). Always respond naturally and fluently in the EXACT SAME language (${langInfo.name}). Do not translate automatically unless explicitly requested. Maintain conversational context and provide concise, accurate information.`;
 
     // Check for Tamil / Tanglish Billing & Order intent
     const structuredBilling = this.parseBillingOrInventoryIntent(userPrompt);
@@ -316,21 +322,116 @@ export class AIEngine {
     prompt: string,
     billing: BillingStructure | null
   ): string {
-    const text = prompt.toLowerCase();
+    const text = prompt.toLowerCase().trim();
+    const langInfo = LanguageService.getInstance().detectLanguage(prompt);
 
     if (billing && billing.type === 'order_intent') {
       const item = billing.items[0];
+      if (langInfo.code === 'ta-Latn') {
+        return `Kandippa! Draft cart-la add pannitten: ${item.quantity} × ${item.itemName} (Total: ₹${item.totalEstimate}).\n\n[Security Notice: Order validate panna keezha irukura "Confirm Order" button click pannunga.]`;
+      } else if (langInfo.code === 'ta') {
+        return `நிச்சயமாக! கார்ட்டில் சேர்க்கப்பட்டது: ${item.quantity} × ${item.itemName} (மொத்தம்: ₹${item.totalEstimate}).\n\n[பாதுகாப்பு குறிப்பு: ஆர்டரை உறுதிப்படுத்த "Confirm Order" அழுத்தவும்.]`;
+      } else if (langInfo.code === 'hi-Latn' || langInfo.code === 'hi') {
+        return `ज़रूर! कार्ट में जोड़ दिया गया है: ${item.quantity} × ${item.itemName} (कुल: ₹${item.totalEstimate}).\n\n[सुरक्षा सूचना: ऑर्डर की पुष्टि करने के लिए "Confirm Order" पर क्लिक करें।]`;
+      }
       return `Sure! Added to draft cart: ${item.quantity} × ${item.itemName} (Estimated: ₹${item.totalEstimate}).\n\n[Security Notice: Offline AI validation confirmed. Click "Confirm Order" to commit changes to local inventory.]`;
     }
 
+    // Tamil Script Handling
+    if (langInfo.code === 'ta') {
+      if (text.includes('தலைநகரம்') || (text.includes('இந்தியா') && text.includes('என்ன'))) {
+        return 'இந்தியாவின் தலைநகரம் புது டெல்லி.';
+      }
+      if (text.includes('வணக்கம்') || text.includes('யார்')) {
+        return 'வணக்கம்! நான் SaaS AI Brain. உங்கள் மொபைல் போனிலேயே 100% பாதுகாப்பாகவும் இன்டர்நெட் இல்லாமலும் இயங்கும் ஆஃப்லைன் செயற்கை நுண்ணறிவு உதவியாளர்.';
+      }
+      return `உங்கள் கேள்வி பெறப்பட்டது: "${prompt}". இது உள்ளூர் சாதனத்தில் பாதுகாப்பாக செயல்படுத்தப்பட்டது.`;
+    }
+
+    // Tanglish Handling (e.g. "Enakku artificial intelligence pathi sollu")
+    if (langInfo.code === 'ta-Latn') {
+      if (text.includes('artificial intelligence') || text.includes('ai pathi') || text.includes('ai paththi')) {
+        return `Artificial Intelligence (AI) na oru computer program or machine, human brain maadhiri think panni problem solve panra technology. Idhu machine learning and neural networks use panni pattern recognize pannum. Namma SaaS AI Brain unga mobile hardware-laye 100% offline-ah run aagudhu, unga privacy safe-ah irukkum!`;
+      }
+      if (text.includes('thala nagaram') || text.includes('capital') || (text.includes('india') && text.includes('enna'))) {
+        return 'India-vin thalainagaram New Delhi (Pudhu Delhi).';
+      }
+      if (text.includes('vanakkam') || text.includes('eppadi irukke') || text.includes('epdi irukke')) {
+        return 'Vanakkam! Naan SaaS AI Brain. Unga mobile-le offline-ah run aagura local AI assistant. Enakku English, Tamil, Tanglish ellam nallave puriyum. Enna help venum?';
+      }
+      return `Ungaloda query "${prompt}" purinjidhu. SaaS AI Brain unga phone hardware-le offline-ah process pannirukku.`;
+    }
+
+    // Hindi & Hinglish Handling
+    if (langInfo.code === 'hi') {
+      if (text.includes('राजधानी') || text.includes('भारत')) {
+        return 'भारत की राजधानी नई दिल्ली है।';
+      }
+      if (text.includes('नमस्ते') || text.includes('परिचय')) {
+        return 'नमस्ते! मैं SaaS AI Brain हूँ, आपका ऑन-डिवाइस ऑफलाइन एआई सहायक जो बिना इंटरनेट के सीधे आपके फोन पर चलता है।';
+      }
+      return `आपका प्रश्न: "${prompt}". यह बिना इंटरनेट के डिवाइस पर प्रोसेस किया गया है।`;
+    }
+
+    if (langInfo.code === 'hi-Latn') {
+      if (text.includes('rajdhani') || text.includes('capital') || text.includes('bharat')) {
+        return 'Bharat ki rajdhani New Delhi (Nayi Dilli) hai.';
+      }
+      if (text.includes('artificial intelligence') || text.includes('ai kya hai') || text.includes('ai ke baare me')) {
+        return 'Artificial Intelligence (AI) ek aisi technology hai jisme computer insani dimag ki tarah sikh kar decisions leta hai. Humara SaaS AI Brain aapke phone par bina internet ke 100% offline kaam karta hai.';
+      }
+      return `Aapka message "${prompt}" process ho gaya hai. Local offline mode me 0 cloud latency ke sath response diya gaya hai.`;
+    }
+
+    // Telugu
+    if (langInfo.code === 'te') {
+      if (text.includes('రాజధాని') || text.includes('భారత')) {
+        return 'భారతదేశ రాజధాని న్యూఢిల్లీ.';
+      }
+      return 'నమస్కారం! నేను SaaS AI Brain, మీ పరికరంలో ఆఫ్‌లైన్‌లో నడిచే స్మార్ట్ AI సహాయకుడిని.';
+    }
+
+    // Malayalam
+    if (langInfo.code === 'ml') {
+      if (text.includes('തലസ്ഥാനം') || text.includes('ഇന്ത്യ')) {
+        return 'ഇന്ത്യയുടെ തലസ്ഥാനം ന്യൂഡൽഹിയാണ്.';
+      }
+      return 'നമസ്കാരം! ഞാൻ SaaS AI Brain, നിങ്ങളുടെ ഉപകരണത്തിൽ ഇന്റർനെറ്റ് ഇല്ലാതെ പ്രവർത്തിക്കുന്ന ലോക്കൽ AI അസിസ്റ്റന്റാണ്.';
+    }
+
+    // Kannada
+    if (langInfo.code === 'kn') {
+      if (text.includes('ರಾಜಧಾನಿ') || text.includes('ಭಾರತ')) {
+        return 'ಭಾರತದ ರಾಜಧಾನಿ ನವದೆಹಲಿ.';
+      }
+      return 'ನಮಸ್ಕಾರ! ನಾನು SaaS AI Brain, ನಿಮ್ಮ ಮೊಬೈಲ್‌ನಲ್ಲಿ ಆಫ್‌ಲೈನ್‌ನಲ್ಲಿ ಕಾರ್ಯನಿರ್ವಹಿಸುವ AI ಸಹಾಯಕ.';
+    }
+
+    // French
+    if (langInfo.code === 'fr') {
+      if (text.includes('capitale') && text.includes('france')) {
+        return 'La capitale de la France est Paris.';
+      }
+      return 'Bonjour! Je suis SaaS AI Brain, votre assistant IA fonctionnant localement et hors ligne sur votre appareil.';
+    }
+
+    // Spanish
+    if (langInfo.code === 'es') {
+      if (text.includes('capital') && text.includes('espana')) {
+        return 'La capital de España es Madrid.';
+      }
+      return '¡Hola! Soy SaaS AI Brain, su asistente de inteligencia artificial local y fuera de línea.';
+    }
+
+    // English Handling
     if (text.includes('hello') || text.includes('introduce')) {
-      return `Hello! I am SaaS AI Brain, your offline on-device AI assistant powered by local quantized SLMs. I run 100% on your device hardware without requiring internet, protecting your privacy and providing instant response times in English, Tamil, and Tanglish.`;
+      return `Hello! I am SaaS AI Brain, your offline on-device AI assistant powered by local quantized SLMs. I run 100% on your device hardware without requiring internet, protecting your privacy and providing instant response times in English, Tamil, Tanglish, Hindi, and more.`;
     }
 
     if (text.includes('inventory management')) {
       return `Inventory management is the systematic process of ordering, storing, tracking, and controlling a business's stock.\n\nKey Pillars:\n1. Stock Tracking: Real-time visibility of units on hand.\n2. Reorder Point (ROP): Safety stock levels to prevent stockouts.\n3. FIFO / LIFO: First-In-First-Out prevents perishable obsolescence.\n4. ABC Analysis: Prioritizing high-value turnover items.\n\nSaaS AI Brain enables offline edge point-of-sale inventory parsing right on your phone.`;
     }
 
-    return `Processed prompt: "${prompt}". Operating in local offline mode with 0 cloud latency and complete device data privacy.`;
+    return `Processed query: "${prompt}". Responding in ${langInfo.name} with complete device privacy and zero cloud latency.`;
   }
 }
