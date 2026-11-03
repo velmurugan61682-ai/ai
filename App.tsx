@@ -17,6 +17,7 @@ import {
   Settings,
   HardDrive,
   BarChart2,
+  Key,
 } from 'lucide-react-native';
 import { lightTheme, darkTheme, ThemeColors } from './src/theme/theme';
 import {
@@ -46,6 +47,8 @@ import { AIChatScreen } from './src/screens/AIChatScreen';
 import { BenchmarkScreen } from './src/screens/BenchmarkScreen';
 import { PerformanceComparisonScreen } from './src/screens/PerformanceComparisonScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
+import { ApiKeysScreen } from './src/screens/ApiKeysScreen';
+import { ApiDocsScreen } from './src/screens/ApiDocsScreen';
 
 export type ScreenId =
   | 'Splash'
@@ -59,7 +62,9 @@ export type ScreenId =
   | 'AIChat'
   | 'Benchmark'
   | 'PerformanceComparison'
-  | 'Settings';
+  | 'Settings'
+  | 'ApiKeys'
+  | 'ApiDocs';
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<ScreenId>('Splash');
@@ -341,6 +346,24 @@ export default function App() {
             onToggleDarkMode={handleToggleDarkMode}
             onRescanHardware={refreshHardware}
             onClearAllData={handleClearAllData}
+            onNavigateToApiKeys={() => setCurrentScreen('ApiKeys')}
+            onNavigateToApiDocs={() => setCurrentScreen('ApiDocs')}
+          />
+        );
+
+      case 'ApiKeys':
+        return (
+          <ApiKeysScreen
+            colors={colors}
+            onOpenDocs={() => setCurrentScreen('ApiDocs')}
+          />
+        );
+
+      case 'ApiDocs':
+        return (
+          <ApiDocsScreen
+            colors={colors}
+            onBack={() => setCurrentScreen('ApiKeys')}
           />
         );
 
@@ -445,6 +468,26 @@ export default function App() {
               ]}
             >
               Testing
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.tabItem}
+            onPress={() => setCurrentScreen('ApiKeys')}
+          >
+            <Key
+              size={20}
+              color={currentScreen === 'ApiKeys' || currentScreen === 'ApiDocs' ? colors.primary : colors.textSubtle}
+            />
+            <Text
+              style={[
+                styles.tabLabel,
+                {
+                  color: currentScreen === 'ApiKeys' || currentScreen === 'ApiDocs' ? colors.primary : colors.textSubtle,
+                },
+              ]}
+            >
+              API Keys
             </Text>
           </TouchableOpacity>
 

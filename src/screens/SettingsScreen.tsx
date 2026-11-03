@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert } from 'react-native';
-import { Moon, RefreshCw, Trash2, ShieldCheck, Database, FileText, Info } from 'lucide-react-native';
+import { Moon, RefreshCw, Trash2, ShieldCheck, Database, FileText, Info, Key, BookOpen } from 'lucide-react-native';
 import { Header } from '../components/Header';
 import { ThemeColors } from '../theme/theme';
 import { ModelStorage } from '../storage/ModelStorage';
@@ -11,6 +11,8 @@ interface SettingsScreenProps {
   onToggleDarkMode: (enabled: boolean) => void;
   onRescanHardware: () => void;
   onClearAllData: () => void;
+  onNavigateToApiKeys?: () => void;
+  onNavigateToApiDocs?: () => void;
 }
 
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({
@@ -19,6 +21,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   onToggleDarkMode,
   onRescanHardware,
   onClearAllData,
+  onNavigateToApiKeys,
+  onNavigateToApiDocs,
 }) => {
   const confirmClearAll = () => {
     Alert.alert(
@@ -90,6 +94,37 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                 <Text style={[styles.settingTitle, { color: colors.error }]}>Reset Chat & Benchmarks</Text>
                 <Text style={[styles.settingDesc, { color: colors.textMuted }]}>
                   Clear local chat history and benchmark records
+                </Text>
+              </View>
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        {/* Developer & API Access */}
+        <View style={[styles.sectionCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+          <Text style={[styles.sectionHeading, { color: colors.text }]}>Developer & API Access</Text>
+
+          <TouchableOpacity style={styles.actionRow} onPress={onNavigateToApiKeys}>
+            <View style={styles.settingLeft}>
+              <Key size={18} color={colors.primary} />
+              <View>
+                <Text style={[styles.settingTitle, { color: colors.text }]}>API Key Management</Text>
+                <Text style={[styles.settingDesc, { color: colors.textMuted }]}>
+                  Generate, inspect, and revoke programmatic Bearer tokens
+                </Text>
+              </View>
+            </View>
+          </TouchableOpacity>
+
+          <View style={[styles.divider, { backgroundColor: colors.divider }]} />
+
+          <TouchableOpacity style={styles.actionRow} onPress={onNavigateToApiDocs}>
+            <View style={styles.settingLeft}>
+              <BookOpen size={18} color={colors.primary} />
+              <View>
+                <Text style={[styles.settingTitle, { color: colors.text }]}>Developer API Docs</Text>
+                <Text style={[styles.settingDesc, { color: colors.textMuted }]}>
+                  Endpoints, cURL examples, rate limits, and code samples
                 </Text>
               </View>
             </View>
