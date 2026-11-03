@@ -7,7 +7,12 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "web": {
-      "bundler": "metro"
+      "bundler": "metro",
+      "shortName": "SaaS AI Brain",
+      "backgroundColor": "#F8F9FE",
+      "themeColor": "#4D44E1",
+      "display": "standalone",
+      "orientation": "portrait"
     },
     "android": {
       "package": "com.saasaibrain.app",

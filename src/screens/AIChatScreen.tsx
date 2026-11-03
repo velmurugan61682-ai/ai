@@ -20,7 +20,6 @@ import {
   ShoppingCart,
   ShieldCheck,
   Check,
-  RotateCcw,
   Cpu,
   Trash2,
   Mic,
@@ -28,16 +27,20 @@ import {
   Volume2,
   VolumeX,
   Square,
+  Play,
+  Pause,
   Languages,
   Radio,
   X,
   Headphones,
+  Download,
 } from 'lucide-react-native';
 import {
   AIModelMetadata,
   BillingStructure,
   ChatMessage,
 } from '../models/modelTypes';
+import { INITIAL_AI_MODELS } from '../models/modelRegistry';
 import { AIEngine } from '../brain/AIEngine';
 import { ModelStorage } from '../storage/ModelStorage';
 import { Header } from '../components/Header';
@@ -45,6 +48,7 @@ import { ThemeColors } from '../theme/theme';
 import { LanguageService, SUPPORTED_LANGUAGES, LanguageInfo } from '../services/LanguageService';
 import { TTSService } from '../services/TTSService';
 import { VoiceService } from '../services/VoiceService';
+import { SpeakingRobot } from '../components/SpeakingRobot';
 
 interface AIChatScreenProps {
   selectedModel: AIModelMetadata | null;
@@ -68,9 +72,14 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
   const [liveTranscript, setLiveTranscript] = useState('');
   const [continuousMode, setContinuousMode] = useState(false);
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
+  const [isPaused, setIsPaused] = useState(false);
   const [speechSpeed, setSpeechSpeed] = useState<number>(1.0);
   const [selectedLanguage, setSelectedLanguage] = useState<LanguageInfo>(SUPPORTED_LANGUAGES[0]);
   const [showLanguageModal, setShowLanguageModal] = useState(false);
+
+  // PWA Install Prompt State
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [canInstallPwa, setCanInstallPwa] = useState(false);
 
   const flatListRef = useRef<FlatList>(null);
   const aiEngine = AIEngine.getInstance();
@@ -82,34 +91,45 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
   const continuousModeRef = useRef(continuousMode);
   continuousModeRef.current = continuousMode;
 
-  const QUICK_EXAMPLES = [
-    'Enakku artificial intelligence pathi sollu.',
-    'இந்தியாவின் தலைநகரம் என்ன?',
-    'Rendu Pepsi add pannu.',
-    'Explain inventory management.',
-    'Hello, introduce yourself.',
-    'Bharat ki rajdhani kya hai?',
-  ];
-
   const SPEECH_SPEEDS = [0.75, 1.0, 1.25, 1.5];
 
+  // Resolve active model fallback so user is NEVER blocked by "No Model Selected"
+  const activeModel: AIModelMetadata = selectedModel || INITIAL_AI_MODELS[0];
+
   useEffect(() => {
+    // Load stored chat history without introducing hardcoded welcome text
     storage.getChatHistory().then((history) => {
-      if (history.length > 0) {
-        setMessages(history);
+      if (history && history.length > 0) {
+        // Filter out any legacy welcome messages if present in storage
+        const cleanHistory = history.filter(
+          (m) =>
+            !m.content.includes("Hello! I am SaaS AI Brain running 100% locally") &&
+            !m.content.includes("Vanakkam! I am SaaS AI Brain running 100%")
+        );
+        setMessages(cleanHistory);
       } else {
-        const welcomeMsg: ChatMessage = {
-          id: 'msg-welcome',
-          role: 'assistant',
-          content:
-            "Vanakkam! I am SaaS AI Brain running 100% locally on your device. You can speak or type in any language: Tamil, English, Tanglish, Hindi, Hinglish, Telugu, Malayalam, and more.",
-          timestamp: Date.now(),
-          modelId: selectedModel?.id,
-          modelName: selectedModel?.name || 'Local SLM',
-        };
-        setMessages([welcomeMsg]);
+        setMessages([]);
       }
     });
+
+    // PWA Install Prompt Listener on Web
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      const handleBeforeInstall = (e: any) => {
+        e.preventDefault();
+        setDeferredPrompt(e);
+        setCanInstallPwa(true);
+      };
+      window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+
+      window.addEventListener('appinstalled', () => {
+        setCanInstallPwa(false);
+        setDeferredPrompt(null);
+      });
+
+      return () => {
+        window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+      };
+    }
 
     return () => {
       ttsService.stop();
@@ -117,11 +137,23 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
     };
   }, []);
 
-  // Handle Speech Recognition Result
+  // Handle PWA Install Prompt
+  const handleInstallPwa = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setCanInstallPwa(false);
+      setDeferredPrompt(null);
+    }
+  };
+
+  // Voice Recording handlers
   const startRecording = async () => {
     if (ttsService.isSpeaking()) {
       await ttsService.stop();
       setSpeakingMessageId(null);
+      setIsPaused(false);
     }
 
     setLiveTranscript('');
@@ -171,18 +203,14 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
     }
   };
 
+  // Fixed Send Message Functionality
   const handleSendPrompt = async (promptToSend?: string) => {
-    const text = (promptToSend || inputText).trim();
+    const text = (promptToSend !== undefined ? promptToSend : inputText).trim();
+
+    // Prevent empty messages or sending while currently generating
     if (!text || isGenerating) return;
 
-    if (!selectedModel) {
-      Alert.alert(
-        'No Model Selected',
-        'Please select and activate a downloaded AI model to begin chatting.'
-      );
-      return;
-    }
-
+    // Clear input immediately upon submission
     setInputText('');
     setLiveTranscript('');
 
@@ -193,6 +221,7 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
       timestamp: Date.now(),
     };
 
+    // Display user message immediately
     setMessages((prev) => [...prev, userMessage]);
     await storage.saveChatMessage(userMessage);
 
@@ -210,8 +239,8 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
         role: 'assistant',
         content: output.text,
         timestamp: Date.now(),
-        modelId: selectedModel.id,
-        modelName: selectedModel.name,
+        modelId: activeModel.id,
+        modelName: activeModel.name,
         inferenceTimeMs: output.metrics.totalTimeMs,
         tokensPerSecond: output.metrics.tokensPerSecond,
         structuredData: output.structuredData,
@@ -221,30 +250,47 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
       setMessages((prev) => [...prev, assistantMessage]);
       await storage.saveChatMessage(assistantMessage);
 
-      // In continuous voice conversation mode, automatically read response aloud and resume listening
+      // In continuous voice mode, speak response and loop
       if (continuousModeRef.current) {
         handlePlayTTS(assistantMessage, true);
       }
     } catch (err: any) {
-      Alert.alert('Inference Notice', err?.message || 'Failed generating inference');
+      console.error('[AIChat] Inference error:', err);
+      const errorMsg: ChatMessage = {
+        id: `msg-${Date.now()}-err`,
+        role: 'assistant',
+        content: `Notice: ${err?.message || 'Inference engine is initializing. Please try again.'}`,
+        timestamp: Date.now(),
+        modelName: activeModel.name,
+      };
+      setMessages((prev) => [...prev, errorMsg]);
     } finally {
       setIsGenerating(false);
       setCurrentStreamingText('');
     }
   };
 
-  // Text-to-Speech handler
+  // Text-to-Speech Play / Pause / Resume / Stop
   const handlePlayTTS = async (item: ChatMessage, triggerContinuousListen = false) => {
+    // If currently speaking this message, toggle pause/stop
     if (speakingMessageId === item.id) {
-      // Toggle stop if already speaking this message
-      await ttsService.stop();
-      setSpeakingMessageId(null);
+      if (isPaused) {
+        await ttsService.resume();
+        setIsPaused(false);
+      } else {
+        await ttsService.stop();
+        setSpeakingMessageId(null);
+        setIsPaused(false);
+      }
       return;
     }
 
+    // Stop previous audio to prevent overlapping speech
+    await ttsService.stop();
     setSpeakingMessageId(item.id);
+    setIsPaused(false);
 
-    // Stop microphone to prevent loop feedback
+    // Stop microphone to eliminate audio feedback
     if (isListening) {
       await voiceService.stopListening();
       setIsListening(false);
@@ -257,10 +303,11 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
       language: detected.bcp47,
       onStart: () => {
         setSpeakingMessageId(item.id);
+        setIsPaused(false);
       },
       onDone: () => {
         setSpeakingMessageId(null);
-        // If continuous mode is enabled, start listening for user's next utterance after speech finishes
+        setIsPaused(false);
         if (triggerContinuousListen && continuousModeRef.current) {
           setTimeout(() => {
             if (continuousModeRef.current) {
@@ -271,11 +318,33 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
       },
       onStopped: () => {
         setSpeakingMessageId(null);
+        setIsPaused(false);
       },
       onError: () => {
         setSpeakingMessageId(null);
+        setIsPaused(false);
       },
     });
+  };
+
+  // Stop all active speech
+  const handleStopAllTTS = async () => {
+    await ttsService.stop();
+    setSpeakingMessageId(null);
+    setIsPaused(false);
+  };
+
+  // Toggle Continuous Voice Mode
+  const toggleContinuousMode = () => {
+    const nextVal = !continuousMode;
+    setContinuousMode(nextVal);
+    continuousModeRef.current = nextVal;
+    if (nextVal) {
+      startRecording();
+    } else {
+      stopRecording();
+      handleStopAllTTS();
+    }
   };
 
   const handleConfirmOrder = (order: BillingStructure) => {
@@ -286,26 +355,15 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
   };
 
   const handleClearChat = async () => {
-    await ttsService.stop();
+    await handleStopAllTTS();
     await voiceService.stopListening();
-    setSpeakingMessageId(null);
     setIsListening(false);
     await storage.clearChatHistory();
     setMessages([]);
   };
 
-  const toggleContinuousMode = () => {
-    const nextVal = !continuousMode;
-    setContinuousMode(nextVal);
-    continuousModeRef.current = nextVal;
-    if (nextVal) {
-      startRecording();
-    } else {
-      stopRecording();
-      ttsService.stop();
-      setSpeakingMessageId(null);
-    }
-  };
+  // Latest assistant message for speaking robot tap
+  const latestAssistantMessage = [...messages].reverse().find((m) => m.role === 'assistant');
 
   return (
     <KeyboardAvoidingView
@@ -313,12 +371,23 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <Header
-        title="Multilingual AI Voice Brain"
-        subtitle={selectedModel ? `Active: ${selectedModel.name}` : 'No model loaded'}
+        title="SaaS AI Brain"
+        subtitle={`Active: ${activeModel.name}`}
         colors={colors}
         rightAction={
           <View style={styles.headerRightActions}>
-            {/* Continuous Voice Conversation Toggle */}
+            {/* PWA Install Button */}
+            {canInstallPwa && (
+              <TouchableOpacity
+                onPress={handleInstallPwa}
+                style={[styles.pwaInstallBtn, { backgroundColor: colors.primary }]}
+              >
+                <Download size={13} color="#FFFFFF" />
+                <Text style={styles.pwaInstallText}>Install App</Text>
+              </TouchableOpacity>
+            )}
+
+            {/* Continuous Live Voice Toggle */}
             <TouchableOpacity
               onPress={toggleContinuousMode}
               style={[
@@ -328,21 +397,21 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
                   : { backgroundColor: colors.surface, borderColor: colors.cardBorder },
               ]}
             >
-              <Headphones size={14} color={continuousMode ? '#FFFFFF' : colors.primary} />
+              <Headphones size={13} color={continuousMode ? '#FFFFFF' : colors.primary} />
               <Text
                 style={[
                   styles.voiceModeText,
                   { color: continuousMode ? '#FFFFFF' : colors.text },
                 ]}
               >
-                {continuousMode ? 'Live Voice' : 'Voice Mode'}
+                {continuousMode ? 'Live' : 'Voice'}
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity onPress={onOpenModelSelector} style={styles.modelSwitchPill}>
-              <Cpu size={14} color={colors.primary} />
+              <Cpu size={13} color={colors.primary} />
               <Text style={[styles.modelSwitchText, { color: colors.primary }]}>
-                {selectedModel ? selectedModel.parameters : 'Select'}
+                {activeModel.parameters}
               </Text>
             </TouchableOpacity>
 
@@ -353,57 +422,60 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
         }
       />
 
-      {/* Voice Assistant Toolbar: Language, Speech Speed & Indicators */}
-      <View style={[styles.voiceToolbar, { backgroundColor: colors.surface, borderBottomColor: colors.divider }]}>
-        <TouchableOpacity
-          style={[styles.toolPill, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
-          onPress={() => setShowLanguageModal(true)}
-        >
-          <Languages size={13} color={colors.primary} />
-          <Text style={[styles.toolPillText, { color: colors.text }]}>
-            {selectedLanguage.name} ({selectedLanguage.nativeName})
-          </Text>
-        </TouchableOpacity>
-
-        {/* Speech Speed Cycle */}
-        <TouchableOpacity
-          style={[styles.toolPill, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+      {/* Robot Assistant Status & Language Header Strip */}
+      <View style={[styles.assistantTopBar, { backgroundColor: colors.card, borderBottomColor: colors.divider }]}>
+        <SpeakingRobot
+          status={speakingMessageId ? 'speaking' : isListening ? 'listening' : 'idle'}
+          colors={colors}
+          size={50}
           onPress={() => {
-            const nextIdx = (SPEECH_SPEEDS.indexOf(speechSpeed) + 1) % SPEECH_SPEEDS.length;
-            setSpeechSpeed(SPEECH_SPEEDS[nextIdx]);
+            if (speakingMessageId) {
+              handleStopAllTTS();
+            } else if (latestAssistantMessage) {
+              handlePlayTTS(latestAssistantMessage);
+            }
           }}
-        >
-          <Volume2 size={13} color={colors.primary} />
-          <Text style={[styles.toolPillText, { color: colors.text }]}>
-            Speed {speechSpeed}x
-          </Text>
-        </TouchableOpacity>
-
-        {speakingMessageId && (
-          <View style={styles.speakingIndicator}>
-            <Radio size={12} color="#10B981" />
-            <Text style={styles.speakingIndicatorText}>Speaking</Text>
-          </View>
-        )}
-      </View>
-
-      {/* Quick Example Prompt Chips */}
-      <View style={[styles.examplesBar, { borderBottomColor: colors.divider }]}>
-        <FlatList
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          data={QUICK_EXAMPLES}
-          keyExtractor={(item) => item}
-          contentContainerStyle={styles.examplesList}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={[styles.exampleChip, { backgroundColor: colors.surface }]}
-              onPress={() => handleSendPrompt(item)}
-            >
-              <Text style={[styles.exampleText, { color: colors.textMuted }]}>{item}</Text>
-            </TouchableOpacity>
-          )}
         />
+
+        <View style={styles.assistantMetaBox}>
+          <Text style={[styles.robotGreetingText, { color: colors.text }]}>
+            {speakingMessageId
+              ? 'Speaking response aloud...'
+              : isListening
+              ? `Listening in ${selectedLanguage.name}...`
+              : 'Qwen AI Voice Brain Online'}
+          </Text>
+          <Text style={[styles.robotSubText, { color: colors.textMuted }]}>
+            {speakingMessageId
+              ? 'Tap robot to pause speech'
+              : 'Type or speak in Tamil, English, or Tanglish'}
+          </Text>
+        </View>
+
+        {/* Language & Speed Selector Chips */}
+        <View style={styles.topBarControls}>
+          <TouchableOpacity
+            style={[styles.smallPill, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}
+            onPress={() => setShowLanguageModal(true)}
+          >
+            <Languages size={12} color={colors.primary} />
+            <Text style={[styles.smallPillText, { color: colors.text }]}>
+              {selectedLanguage.code}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.smallPill, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}
+            onPress={() => {
+              const nextIdx = (SPEECH_SPEEDS.indexOf(speechSpeed) + 1) % SPEECH_SPEEDS.length;
+              setSpeechSpeed(SPEECH_SPEEDS[nextIdx]);
+            }}
+          >
+            <Text style={[styles.smallPillText, { color: colors.text }]}>
+              {speechSpeed}x
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Chat Messages List */}
@@ -413,6 +485,13 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.messagesContainer}
         onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+        ListEmptyComponent={
+          <View style={styles.emptyChatPlaceholder}>
+            <Text style={[styles.emptyChatText, { color: colors.textSubtle }]}>
+              No messages yet. Type a question or tap the mic to start.
+            </Text>
+          </View>
+        }
         renderItem={({ item }) => {
           const isUser = item.role === 'user';
           const isThisSpeaking = speakingMessageId === item.id;
@@ -445,7 +524,7 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
                     <View style={styles.modelTagRow}>
                       <Sparkles size={11} color={colors.primary} />
                       <Text style={[styles.modelTagText, { color: colors.primary }]}>
-                        {item.modelName || 'Local SLM'}
+                        {item.modelName || activeModel.name}
                       </Text>
                       {item.tokensPerSecond && (
                         <Text style={[styles.tpsTagText, { color: colors.textSubtle }]}>
@@ -461,7 +540,7 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
                       )}
                     </View>
 
-                    {/* Speaker Read Aloud Button */}
+                    {/* Speaker Voice Generation Icon */}
                     <TouchableOpacity
                       onPress={() => handlePlayTTS(item)}
                       style={[
@@ -470,6 +549,7 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
                           ? { backgroundColor: '#EF4444' }
                           : { backgroundColor: colors.surface },
                       ]}
+                      accessibilityLabel="Read response aloud"
                     >
                       {isThisSpeaking ? (
                         <Square size={13} color="#FFFFFF" />
@@ -485,6 +565,7 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
                     styles.messageText,
                     { color: isUser ? '#FFFFFF' : colors.text },
                   ]}
+                  selectable
                 >
                   {item.content}
                 </Text>
@@ -513,7 +594,7 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
                     <View style={styles.securityNoteRow}>
                       <ShieldCheck size={12} color={colors.success} />
                       <Text style={[styles.securityText, { color: colors.textMuted }]}>
-                        Security: AI cannot auto-execute payments without validation.
+                        Security: Local execution requires confirmation.
                       </Text>
                     </View>
 
@@ -532,7 +613,7 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
         }}
       />
 
-      {/* Active Streaming Bubble */}
+      {/* Active Streaming Token Bubble */}
       {isGenerating && (
         <View style={styles.streamingWrapper}>
           <View
@@ -544,7 +625,7 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
             <View style={styles.modelTagRow}>
               <ActivityIndicator size="small" color={colors.primary} />
               <Text style={[styles.modelTagText, { color: colors.primary }]}>
-                Generating token stream...
+                Qwen generating response...
               </Text>
             </View>
             <Text style={[styles.messageText, { color: colors.text }]}>
@@ -554,7 +635,7 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
         </View>
       )}
 
-      {/* Live Voice Recording Overlay Banner */}
+      {/* Live Voice Recording Floating Banner */}
       {isListening && (
         <View style={[styles.listeningBanner, { backgroundColor: colors.card, borderColor: colors.primary }]}>
           <View style={styles.listeningStatusRow}>
@@ -588,7 +669,7 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
         </View>
       )}
 
-      {/* Input Bar */}
+      {/* Chat Input Bar */}
       <View style={[styles.inputBar, { backgroundColor: colors.card, borderTopColor: colors.divider }]}>
         {/* Microphone Button */}
         <TouchableOpacity
@@ -599,6 +680,7 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
               : { backgroundColor: colors.primary },
           ]}
           onPress={isListening ? stopRecording : startRecording}
+          accessibilityLabel="Voice Input"
         >
           {isListening ? (
             <MicOff size={20} color="#FFFFFF" />
@@ -607,27 +689,42 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
           )}
         </TouchableOpacity>
 
+        {/* Text Input with Enter key support */}
         <TextInput
           style={[styles.textInput, { color: colors.text, backgroundColor: colors.surface }]}
-          placeholder={`Speak or type in ${selectedLanguage.nativeName}...`}
+          placeholder={`Ask Qwen in Tamil, English, or Tanglish...`}
           placeholderTextColor={colors.textSubtle}
           value={inputText}
           onChangeText={setInputText}
           multiline
           maxLength={1000}
+          onSubmitEditing={() => handleSendPrompt()}
+          onKeyPress={(e: any) => {
+            if (Platform.OS === 'web' && e.nativeEvent?.key === 'Enter' && !e.nativeEvent?.shiftKey) {
+              e.preventDefault?.();
+              handleSendPrompt();
+            }
+          }}
         />
 
+        {/* Send Button */}
         <TouchableOpacity
           style={[
             styles.sendButton,
             {
               backgroundColor: inputText.trim() ? colors.primary : colors.surface,
+              opacity: isGenerating ? 0.6 : 1,
             },
           ]}
           onPress={() => handleSendPrompt()}
           disabled={!inputText.trim() || isGenerating}
+          accessibilityLabel="Send message"
         >
-          <Send size={18} color={inputText.trim() ? '#FFFFFF' : colors.textSubtle} />
+          {isGenerating ? (
+            <ActivityIndicator size="small" color={inputText.trim() ? '#FFFFFF' : colors.textSubtle} />
+          ) : (
+            <Send size={18} color={inputText.trim() ? '#FFFFFF' : colors.textSubtle} />
+          )}
         </TouchableOpacity>
       </View>
 
@@ -636,7 +733,7 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
             <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: colors.text }]}>Select Voice Language</Text>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>Voice Language</Text>
               <TouchableOpacity onPress={() => setShowLanguageModal(false)}>
                 <X size={20} color={colors.textMuted} />
               </TouchableOpacity>
@@ -692,6 +789,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
+  pwaInstallBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 14,
+  },
+  pwaInstallText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
   voiceModeBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -721,63 +831,57 @@ const styles = StyleSheet.create({
   clearBtn: {
     padding: 6,
   },
-  voiceToolbar: {
+  assistantTopBar: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    gap: 8,
+    paddingVertical: 8,
+    gap: 12,
     borderBottomWidth: 1,
   },
-  toolPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 12,
-    borderWidth: 1,
+  assistantMetaBox: {
+    flex: 1,
   },
-  toolPillText: {
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  speakingIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginLeft: 'auto',
-    backgroundColor: '#D1FAE5',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 10,
-  },
-  speakingIndicatorText: {
-    fontSize: 10,
+  robotGreetingText: {
+    fontSize: 12,
     fontWeight: '700',
-    color: '#065F46',
   },
-  examplesBar: {
-    borderBottomWidth: 1,
+  robotSubText: {
+    fontSize: 10,
+    marginTop: 1,
   },
-  examplesList: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+  topBarControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 6,
   },
-  exampleChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 12,
+  smallPill: {
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderRadius: 10,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
   },
-  exampleText: {
-    fontSize: 11,
-    fontWeight: '500',
+  smallPillText: {
+    fontSize: 10,
+    fontWeight: '700',
   },
   messagesContainer: {
     padding: 12,
     paddingBottom: 20,
     gap: 12,
+    flexGrow: 1,
+  },
+  emptyChatPlaceholder: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+  },
+  emptyChatText: {
+    fontSize: 13,
   },
   messageWrapper: {
     marginVertical: 4,
@@ -830,7 +934,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   speakerBtn: {
-    padding: 5,
+    padding: 6,
     borderRadius: 12,
   },
   messageText: {

@@ -212,7 +212,7 @@ export default function App() {
     Alert.alert('Storage Cleared', 'Chat logs and benchmark history reset.');
   };
 
-  const selectedModel = selectedModelId ? getModelById(selectedModelId) || null : null;
+  const selectedModel = (selectedModelId ? getModelById(selectedModelId) : null) || INITIAL_AI_MODELS[0];
   const latestBenchmark = benchmarks.length > 0 ? benchmarks[0] : null;
 
   // Render navigation screen

@@ -1,0 +1,26 @@
+{
+  "short_name": "SaaS AI Brain",
+  "name": "SaaS AI Brain",
+  "description": "On-Device Multilingual Local AI Brain & SLM Edge Intelligence",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#F8F9FE",
+  "theme_color": "#4D44E1",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "categories": ["productivity", "utilities", "developer tools"]
+}
+

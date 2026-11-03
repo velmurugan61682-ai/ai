@@ -7,10 +7,10 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "build:web": "expo export -p web",
-    "build": "expo export -p web",
+    "build:web": "expo export -p web && node -e \"require('fs').cpSync('public', 'dist', { recursive: true, force: true })\"",
+    "build": "expo export -p web && node -e \"require('fs').cpSync('public', 'dist', { recursive: true, force: true })\"",
     "server": "node server/index.js",
-    "prebuild": "expo prebuild",
+    "expo:prebuild": "expo prebuild",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
