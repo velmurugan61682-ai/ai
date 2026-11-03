@@ -50,6 +50,17 @@ export class ModelStorage {
     return `${MODEL_DIRECTORY}${fileName}`;
   }
 
+  public async isModelFilePresent(fileName: string): Promise<boolean> {
+    if (Platform.OS === 'web') return false;
+    try {
+      const filePath = this.getModelPath(fileName);
+      const info = await FileSystem.getInfoAsync(filePath);
+      return Boolean(info.exists);
+    } catch {
+      return false;
+    }
+  }
+
   public async getModelStates(): Promise<Record<string, ModelRuntimeState>> {
     try {
       const json = await AsyncStorage.getItem(STORAGE_KEYS.MODEL_STATES);

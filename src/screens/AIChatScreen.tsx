@@ -97,6 +97,11 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
   const activeModel: AIModelMetadata = selectedModel || INITIAL_AI_MODELS[0];
 
   useEffect(() => {
+    // Eagerly ensure model context is ready
+    aiEngine.ensureModelLoaded(activeModel.id).catch((err) => {
+      console.warn('[AIChatScreen] Auto-loading active model notice:', err);
+    });
+
     // Load stored chat history without introducing hardcoded welcome text
     storage.getChatHistory().then((history) => {
       if (history && history.length > 0) {
@@ -230,7 +235,10 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
     setCurrentTps(null);
 
     try {
-      const output = await aiEngine.generateCompletion(text, (token) => {
+      // Ensure active Qwen model is loaded in memory for native inference
+      await aiEngine.ensureModelLoaded(activeModel.id);
+
+      const output = await aiEngine.generateCompletion(text, messages, (token) => {
         setCurrentStreamingText((prev) => prev + token);
       });
 
@@ -259,7 +267,7 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
       const errorMsg: ChatMessage = {
         id: `msg-${Date.now()}-err`,
         role: 'assistant',
-        content: `Notice: ${err?.message || 'Inference engine is initializing. Please try again.'}`,
+        content: `⚠️ Local Inference Error: ${err?.message || 'Model inference failed. Please check device memory or verify the model file in the Models tab.'}`,
         timestamp: Date.now(),
         modelName: activeModel.name,
       };
