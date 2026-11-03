@@ -32,12 +32,10 @@ export interface AIModelMetadata {
   subtitle: string;
   family: 'Qwen' | 'Llama';
   repo?: string;
-  repo?: string;
   parameters: string;
   quantization: string;
   fileSizeMB: number;
   downloadSizeMB: number;
-  exactSizeBytes?: number;
   exactSizeBytes?: number;
   minPhysicalRAMGB: number;
   recommendedAvailableRAMGB: number;
