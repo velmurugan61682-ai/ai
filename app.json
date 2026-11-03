@@ -4,11 +4,19 @@
     "slug": "saas-ai-brain",
     "version": "1.0.0",
     "orientation": "portrait",
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#4D44E1"
+    },
     "web": {
       "bundler": "metro",
-      "shortName": "SaaS AI Brain",
+      "name": "SaaS AI Brain",
+      "shortName": "AI Brain",
+      "favicon": "./assets/favicon.png",
       "backgroundColor": "#F8F9FE",
       "themeColor": "#4D44E1",
       "display": "standalone",
@@ -16,6 +24,10 @@
     },
     "android": {
       "package": "com.saasaibrain.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#4D44E1"
+      },
       "permissions": [
         "INTERNET",
         "ACCESS_NETWORK_STATE",

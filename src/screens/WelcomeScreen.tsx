@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image } from 'react-native';
 import { Cpu, ShieldCheck, Zap, ArrowRight, Sparkles, CheckCircle2 } from 'lucide-react-native';
 import { ThemeColors } from '../theme/theme';
 
@@ -16,6 +16,11 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ colors, onGetStart
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.headerBox}>
+        <Image
+          source={require('../../assets/ai-brain-icon-1024.png')}
+          style={styles.logoImage}
+          resizeMode="contain"
+        />
         <View style={[styles.badge, { backgroundColor: colors.primarySubtle }]}>
           <Sparkles size={14} color={colors.primary} />
           <Text style={[styles.badgeText, { color: colors.primary }]}>Enterprise Edge AI</Text>
@@ -115,6 +120,12 @@ const styles = StyleSheet.create({
   headerBox: {
     alignItems: 'center',
     marginBottom: 28,
+  },
+  logoImage: {
+    width: 68,
+    height: 68,
+    borderRadius: 16,
+    marginBottom: 14,
   },
   badge: {
     flexDirection: 'row',

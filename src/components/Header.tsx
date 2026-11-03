@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, Image } from 'react-native';
 import { ThemeColors } from '../theme/theme';
 
 interface HeaderProps {
@@ -8,6 +8,7 @@ interface HeaderProps {
   colors: ThemeColors;
   rightAction?: React.ReactNode;
   leftAction?: React.ReactNode;
+  showLogo?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -16,11 +17,19 @@ export const Header: React.FC<HeaderProps> = ({
   colors,
   rightAction,
   leftAction,
+  showLogo = true,
 }) => {
   return (
     <View style={[styles.headerContainer, { borderBottomColor: colors.divider }]}>
       <View style={styles.leftRow}>
         {leftAction}
+        {showLogo && (
+          <Image
+            source={require('../../assets/ai-brain-icon-1024.png')}
+            style={styles.headerLogo}
+            resizeMode="contain"
+          />
+        )}
         <View style={styles.textCol}>
           <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
           {subtitle ? (
@@ -47,6 +56,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     flex: 1,
+  },
+  headerLogo: {
+    width: 36,
+    height: 36,
+    borderRadius: 9,
+    marginRight: 10,
   },
   textCol: {
     flex: 1,

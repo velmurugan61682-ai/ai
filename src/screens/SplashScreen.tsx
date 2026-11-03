@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Animated } from 'react-native';
-import { Brain, Cpu, ShieldCheck } from 'lucide-react-native';
+import { View, Text, StyleSheet, Animated, Image } from 'react-native';
+import { Cpu, ShieldCheck } from 'lucide-react-native';
 import { ThemeColors } from '../theme/theme';
 
 interface SplashScreenProps {
@@ -45,7 +45,11 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ colors, onFinish }) 
         ]}
       >
         <View style={styles.iconCircle}>
-          <Brain size={56} color="#FFFFFF" />
+          <Image
+            source={require('../../assets/ai-brain-icon-1024.png')}
+            style={styles.logoImage}
+            resizeMode="contain"
+          />
         </View>
 
         <Text style={styles.title}>SaaS AI Brain</Text>
@@ -83,13 +87,17 @@ const styles = StyleSheet.create({
   iconCircle: {
     width: 104,
     height: 104,
-    borderRadius: 52,
-    backgroundColor: 'rgba(255, 255, 255, 0.18)',
+    borderRadius: 26,
+    backgroundColor: 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 24,
-    borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.35)',
+    overflow: 'hidden',
+  },
+  logoImage: {
+    width: 104,
+    height: 104,
+    borderRadius: 24,
   },
   title: {
     fontSize: 32,
