@@ -1,15 +1,23 @@
 import * as FileSystem from 'expo-file-system';
-import * as Crypto from 'expo-crypto';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import NetInfo from '@react-native-community/netinfo';
+import { Platform } from 'react-native';
 import { AIModelMetadata, ModelRuntimeState } from '../models/modelTypes';
 import { ModelStorage } from '../storage/ModelStorage';
+import { AIEngine } from '../brain/AIEngine';
 
-type ProgressCallback = (progress: number, downloadedBytes: number, totalBytes: number) => void;
+export type ProgressCallback = (progress: number, downloadedBytes: number, totalBytes: number) => void;
+export type CellularConfirmHandler = (model: AIModelMetadata) => Promise<boolean>;
+
+const RESUMABLE_STATE_KEY_PREFIX = '@saas_ai_brain_resumable_v1_';
 
 export class ModelDownloader {
   private static instance: ModelDownloader;
   private storage: ModelStorage;
-  private activeDownloads: Map<string, FileSystem.DownloadResumable> = new Map();
+  private activeDownload: FileSystem.DownloadResumable | null = null;
+  private activeModelId: string | null = null;
   private listeners: Map<string, Set<ProgressCallback>> = new Map();
+  private cellularPromptHandler: CellularConfirmHandler | null = null;
 
   private constructor() {
     this.storage = ModelStorage.getInstance();
@@ -20,6 +28,18 @@ export class ModelDownloader {
       ModelDownloader.instance = new ModelDownloader();
     }
     return ModelDownloader.instance;
+  }
+
+  public setCellularPromptHandler(handler: CellularConfirmHandler | null): void {
+    this.cellularPromptHandler = handler;
+  }
+
+  public isAnyDownloadActive(): boolean {
+    return this.activeDownload !== null && this.activeModelId !== null;
+  }
+
+  public getActiveDownloadingModelId(): string | null {
+    return this.activeModelId;
   }
 
   public subscribeProgress(modelId: string, cb: ProgressCallback): () => void {
@@ -35,47 +55,128 @@ export class ModelDownloader {
   private notifyProgress(modelId: string, progress: number, downloaded: number, total: number) {
     const cbs = this.listeners.get(modelId);
     if (cbs) {
-      cbs.forEach((cb) => cb(progress, downloaded, total));
+      cbs.forEach((cb) => {
+        try {
+          cb(progress, downloaded, total);
+        } catch (e) {
+          console.warn('[ModelDownloader] Progress callback error:', e);
+        }
+      });
     }
   }
 
+  /**
+   * Starts or resumes verified resumable download for a model into documentDirectory/models/
+   * Writes to <file>.part, verifies exact byte size on completion, then atomically moves to final file.
+   */
   public async startDownload(
     model: AIModelMetadata,
-    onProgress?: ProgressCallback
+    onProgress?: ProgressCallback,
+    skipCellularCheck = false
   ): Promise<string> {
-    await this.storage.ensureModelDirectory();
-    const targetPath = this.storage.getModelPath(model.fileName);
+    if (Platform.OS === 'web') {
+      throw new Error('On-device AI model downloading is supported on Android only.');
+    }
 
     if (onProgress) {
       this.subscribeProgress(model.id, onProgress);
     }
 
-    // Check if already downloaded
-    const fileInfo = await FileSystem.getInfoAsync(targetPath);
-    if (fileInfo.exists && (fileInfo.size ?? 0) >= model.fileSizeMB * 1024 * 1024 * 0.95) {
-      await this.storage.updateModelState(model.id, {
-        status: 'downloaded',
-        downloadProgress: 100,
-        downloadedBytes: fileInfo.size ?? model.fileSizeMB * 1024 * 1024,
-        totalBytes: fileInfo.size ?? model.fileSizeMB * 1024 * 1024,
-        localPath: targetPath,
-      });
-      return targetPath;
+    // 1. Mutex: Only ONE download at a time
+    if (this.isAnyDownloadActive()) {
+      if (this.activeModelId === model.id) {
+        throw new Error(`Download for ${model.name} is already in progress.`);
+      }
+      throw new Error(
+        `Another model download is currently active. Please wait or cancel the active download first.`
+      );
     }
 
+    await this.storage.ensureModelDirectory();
+    const finalPath = this.storage.getModelPath(model.fileName);
+    const partPath = `${finalPath}.part`;
+    const expectedBytes = model.exactSizeBytes ?? Math.round(model.fileSizeMB * 1024 * 1024);
+
+    // 2. Check if valid file already exists (NEVER re-download valid existing file)
+    const existingFileInfo = await FileSystem.getInfoAsync(finalPath);
+    if (existingFileInfo.exists) {
+      if (existingFileInfo.size === expectedBytes) {
+        console.log(`[ModelDownloader] Valid file exists for ${model.name} (${existingFileInfo.size} bytes).`);
+        await this.storage.updateModelState(model.id, {
+          status: 'downloaded',
+          downloadProgress: 100,
+          downloadedBytes: expectedBytes,
+          totalBytes: expectedBytes,
+          localPath: finalPath,
+          errorMessage: undefined,
+        });
+        return finalPath;
+      } else {
+        console.warn(
+          `[ModelDownloader] Existing file for ${model.name} is corrupted (${existingFileInfo.size} vs ${expectedBytes} B). Removing.`
+        );
+        await FileSystem.deleteAsync(finalPath, { idempotent: true });
+      }
+    }
+
+    // 3. Free Disk Space Check before starting
+    try {
+      const freeBytes = await FileSystem.getFreeDiskStorageAsync();
+      const requiredBytes = expectedBytes + 50 * 1024 * 1024; // 50 MB safety margin
+      if (freeBytes < requiredBytes) {
+        const freeMB = (freeBytes / (1024 * 1024)).toFixed(0);
+        const reqMB = (requiredBytes / (1024 * 1024)).toFixed(0);
+        const errorMsg = `Insufficient disk space: ${freeMB} MB available, but ${model.name} requires ${reqMB} MB. Please free storage and retry.`;
+        await this.storage.updateModelState(model.id, {
+          status: 'error',
+          errorMessage: errorMsg,
+        });
+        throw new Error(errorMsg);
+      }
+    } catch (e: any) {
+      if (e.message?.includes('Insufficient disk space')) throw e;
+      console.warn('[ModelDownloader] Free disk check warning:', e);
+    }
+
+    // 4. Network Connectivity & Cellular Check
+    const netState = await NetInfo.fetch();
+    if (!netState.isConnected) {
+      const offlineMsg = 'No network connection. Please connect to Wi-Fi or mobile data and retry.';
+      await this.storage.updateModelState(model.id, {
+        status: 'error',
+        errorMessage: offlineMsg,
+      });
+      throw new Error(offlineMsg);
+    }
+
+    if (netState.type === 'cellular' && !skipCellularCheck) {
+      if (this.cellularPromptHandler) {
+        const approved = await this.cellularPromptHandler(model);
+        if (!approved) {
+          console.log('[ModelDownloader] Download cancelled by user due to cellular prompt.');
+          await this.storage.updateModelState(model.id, {
+            status: 'paused',
+            errorMessage: 'Download paused: Cellular data confirmation required.',
+          });
+          throw new Error('Cellular download cancelled by user.');
+        }
+      }
+    }
+
+    // 5. Initialize Resumable Download
+    this.activeModelId = model.id;
     await this.storage.updateModelState(model.id, {
       status: 'downloading',
       errorMessage: undefined,
+      totalBytes: expectedBytes,
     });
 
-    const callback: FileSystem.FileSystemNetworkTaskProgressCallback<
+    const progressCallback: FileSystem.FileSystemNetworkTaskProgressCallback<
       FileSystem.DownloadProgressData
     > = (data) => {
-      const total = data.totalBytesExpectedToWrite > 0
-        ? data.totalBytesExpectedToWrite
-        : model.fileSizeMB * 1024 * 1024;
       const written = data.totalBytesWritten;
-      const progress = Math.min(100, Math.round((written / total) * 100));
+      const total = expectedBytes;
+      const progress = Math.min(99, Math.max(0, Math.round((written / total) * 100)));
 
       this.storage.updateModelState(model.id, {
         downloadProgress: progress,
@@ -86,111 +187,203 @@ export class ModelDownloader {
       this.notifyProgress(model.id, progress, written, total);
     };
 
-    const downloadResumable = FileSystem.createDownloadResumable(
-      model.downloadUrl,
-      targetPath,
-      {},
-      callback
-    );
+    // Check for saved resumable state
+    let savedStateJson: string | null = null;
+    try {
+      savedStateJson = await AsyncStorage.getItem(`${RESUMABLE_STATE_KEY_PREFIX}${model.id}`);
+    } catch {}
 
-    this.activeDownloads.set(model.id, downloadResumable);
+    let downloadResumable: FileSystem.DownloadResumable;
+    if (savedStateJson) {
+      try {
+        const savedState = JSON.parse(savedStateJson);
+        downloadResumable = FileSystem.createDownloadResumable(
+          model.downloadUrl,
+          partPath,
+          {},
+          progressCallback,
+          savedState
+        );
+        console.log(`[ModelDownloader] Resuming download for ${model.name} from saved snapshot.`);
+      } catch (err) {
+        console.warn('[ModelDownloader] Error restoring resumable state, starting fresh:', err);
+        downloadResumable = FileSystem.createDownloadResumable(
+          model.downloadUrl,
+          partPath,
+          {},
+          progressCallback
+        );
+      }
+    } else {
+      downloadResumable = FileSystem.createDownloadResumable(
+        model.downloadUrl,
+        partPath,
+        {},
+        progressCallback
+      );
+    }
+
+    this.activeDownload = downloadResumable;
 
     try {
+      console.log(`[ModelDownloader] Starting download for ${model.name} to ${partPath}...`);
       const result = await downloadResumable.downloadAsync();
-      this.activeDownloads.delete(model.id);
 
-      if (result && result.uri) {
-        // Verify integrity
-        await this.storage.updateModelState(model.id, {
-          status: 'verifying',
-          downloadProgress: 100,
-        });
-
-        const isValid = await this.verifyFileIntegrity(result.uri, model);
-        if (isValid) {
-          await this.storage.updateModelState(model.id, {
-            status: 'downloaded',
-            downloadProgress: 100,
-            localPath: result.uri,
-          });
-          return result.uri;
-        } else {
-          await this.storage.updateModelState(model.id, {
-            status: 'corrupted',
-            errorMessage: 'File integrity verification failed. File may be incomplete.',
-          });
-          throw new Error('File integrity verification failed');
-        }
-      } else {
-        throw new Error('Download failed without result URI');
+      // Check if cancelled/aborted
+      if (!result || !result.uri) {
+        throw new Error('Download terminated without output URI.');
       }
+
+      // 6. Verification: Check byte size of the downloaded .part file
+      await this.storage.updateModelState(model.id, {
+        status: 'verifying',
+        downloadProgress: 100,
+      });
+
+      const partInfo = await FileSystem.getInfoAsync(partPath);
+      if (!partInfo.exists) {
+        throw new Error('Downloaded partial file not found on disk.');
+      }
+
+      const actualBytes = partInfo.size ?? 0;
+      console.log(
+        `[ModelDownloader] Download completed. Verifying size: actual=${actualBytes} B, expected=${expectedBytes} B`
+      );
+
+      // Verify file size equals expected
+      if (actualBytes !== expectedBytes) {
+        await FileSystem.deleteAsync(partPath, { idempotent: true });
+        await AsyncStorage.removeItem(`${RESUMABLE_STATE_KEY_PREFIX}${model.id}`);
+        const mismatchError = `Verification failed: File size mismatch (received ${actualBytes} bytes, expected ${expectedBytes} bytes). Corrupt partial removed.`;
+        await this.storage.updateModelState(model.id, {
+          status: 'corrupted',
+          errorMessage: mismatchError,
+          downloadProgress: 0,
+        });
+        throw new Error(mismatchError);
+      }
+
+      // 7. Atomic Rename: move from .part to final destination
+      await FileSystem.moveAsync({
+        from: partPath,
+        to: finalPath,
+      });
+
+      // Clear saved snapshot
+      await AsyncStorage.removeItem(`${RESUMABLE_STATE_KEY_PREFIX}${model.id}`);
+
+      await this.storage.updateModelState(model.id, {
+        status: 'downloaded',
+        downloadProgress: 100,
+        downloadedBytes: expectedBytes,
+        totalBytes: expectedBytes,
+        localPath: finalPath,
+        errorMessage: undefined,
+      });
+
+      this.notifyProgress(model.id, 100, expectedBytes, expectedBytes);
+      console.log(`[ModelDownloader] Successfully verified and installed ${model.name} to ${finalPath}`);
+      return finalPath;
     } catch (error: any) {
-      this.activeDownloads.delete(model.id);
-      const isPaused = error?.message?.includes('pause') || error?.message?.includes('abort');
-      if (!isPaused) {
+      const isCancellation =
+        error?.message?.includes('cancel') ||
+        error?.message?.includes('pause') ||
+        error?.message?.includes('abort');
+
+      if (!isCancellation && !error?.message?.includes('Verification failed')) {
+        // Save resumable snapshot if available for resume
+        try {
+          const snapshot = downloadResumable.savable();
+          await AsyncStorage.setItem(
+            `${RESUMABLE_STATE_KEY_PREFIX}${model.id}`,
+            JSON.stringify(snapshot)
+          );
+        } catch {}
+
         await this.storage.updateModelState(model.id, {
           status: 'error',
-          errorMessage: error?.message || 'Download failed due to network or storage error',
+          errorMessage: error?.message || 'Download failed due to network error.',
         });
       }
       throw error;
+    } finally {
+      this.activeDownload = null;
+      this.activeModelId = null;
     }
   }
 
+  /**
+   * Pauses active download and saves resumable state.
+   */
   public async pauseDownload(modelId: string): Promise<void> {
-    const download = this.activeDownloads.get(modelId);
-    if (download) {
+    if (this.activeModelId === modelId && this.activeDownload) {
       try {
-        await download.pauseAsync();
-        this.activeDownloads.delete(modelId);
-        await this.storage.updateModelState(modelId, { status: 'paused' });
+        const snapshot = await this.activeDownload.pauseAsync();
+        await AsyncStorage.setItem(
+          `${RESUMABLE_STATE_KEY_PREFIX}${modelId}`,
+          JSON.stringify(snapshot)
+        );
       } catch (e) {
-        console.warn('Failed pausing download:', e);
+        console.warn('[ModelDownloader] Pause notice:', e);
       }
+      this.activeDownload = null;
+      this.activeModelId = null;
+      await this.storage.updateModelState(modelId, { status: 'paused' });
     }
   }
 
-  public async resumeDownload(
-    model: AIModelMetadata,
-    onProgress?: ProgressCallback
-  ): Promise<string> {
-    return this.startDownload(model, onProgress);
-  }
-
-  public async deleteModel(modelId: string, fileName: string): Promise<boolean> {
-    // If active download, cancel it first
-    const download = this.activeDownloads.get(modelId);
-    if (download) {
+  /**
+   * Cancels active download, cleans up .part file, and resets state.
+   */
+  public async cancelDownload(modelId: string): Promise<void> {
+    if (this.activeModelId === modelId && this.activeDownload) {
       try {
-        await download.cancelAsync();
-      } catch {}
-      this.activeDownloads.delete(modelId);
+        await this.activeDownload.cancelAsync();
+      } catch (e) {
+        console.warn('[ModelDownloader] Cancel async notice:', e);
+      }
+      this.activeDownload = null;
+      this.activeModelId = null;
     }
-    return this.storage.deleteModelFile(modelId, fileName);
+
+    // Clean up .part file
+    try {
+      const finalPath = this.storage.getModelPath(`${modelId}.gguf`);
+      const partPath = `${finalPath}.part`;
+      await FileSystem.deleteAsync(partPath, { idempotent: true });
+    } catch {}
+
+    await AsyncStorage.removeItem(`${RESUMABLE_STATE_KEY_PREFIX}${modelId}`);
+    await this.storage.updateModelState(modelId, {
+      status: 'not_downloaded',
+      downloadProgress: 0,
+      downloadedBytes: 0,
+      errorMessage: undefined,
+    });
   }
 
-  public async verifyFileIntegrity(filePath: string, model: AIModelMetadata): Promise<boolean> {
-    try {
-      const fileInfo = await FileSystem.getInfoAsync(filePath);
-      if (!fileInfo.exists) return false;
-
-      // Check size tolerance (within 10% expected size for quantized GGUF)
-      const expectedBytes = model.fileSizeMB * 1024 * 1024;
-      const actualBytes = fileInfo.size ?? 0;
-      if (actualBytes < expectedBytes * 0.85) {
-        return false;
-      }
-
-      // If checksum is provided, verify SHA256 where accessible
-      if (model.sha256Checksum) {
-        // Fast header check or digest verification
-        return true;
-      }
-
-      return true;
-    } catch (e) {
-      console.error('Integrity check error:', e);
-      return false;
+  /**
+   * Safe delete:
+   * 1. If model is currently loaded in AIEngine, unload/release native context first.
+   * 2. Cancel any running download for this model.
+   * 3. Delete <file>.gguf and <file>.gguf.part from disk.
+   * 4. Clear storage & selection states.
+   */
+  public async deleteModel(modelId: string, fileName: string): Promise<boolean> {
+    // 1. Unload if active in memory
+    const aiEngine = AIEngine.getInstance();
+    if (aiEngine.getCurrentModelId() === modelId) {
+      console.log(`[ModelDownloader] Model ${modelId} is active in memory. Unloading before deletion...`);
+      await aiEngine.unloadCurrentModel();
     }
+
+    // 2. Cancel download if active
+    if (this.activeModelId === modelId) {
+      await this.cancelDownload(modelId);
+    }
+
+    // 3. Delete file and partial
+    await AsyncStorage.removeItem(`${RESUMABLE_STATE_KEY_PREFIX}${modelId}`);
+    return this.storage.deleteModelFile(modelId, fileName);
   }
 }
