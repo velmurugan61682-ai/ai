@@ -1,3 +1,9 @@
+import { connectToDatabase } from '../../server/db';
+import { ApiKey } from '../../server/models/ApiKey';
+import { hashApiKey } from '../../server/utils/cryptoKey';
+import { INITIAL_AI_MODELS } from '../../src/models/modelRegistry';
+import { AIModelMetadata } from '../../src/models/modelTypes';
+
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -30,7 +36,7 @@ export default async function handler(req: any, res: any) {
 
   return res.status(200).json({
     object: 'list',
-    data: INITIAL_AI_MODELS.map((m) => ({
+    data: INITIAL_AI_MODELS.map((m: AIModelMetadata) => ({
       id: m.id,
       name: m.name,
       family: m.family,
@@ -44,4 +50,3 @@ export default async function handler(req: any, res: any) {
     })),
   });
 }
-

@@ -1,9 +1,8 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { connectToDatabase } from '../../server/db';
-import { ApiKey } from '../../server/models/ApiKey';
-import { hashApiKey } from '../../server/utils/cryptoKey';
+import { connectToDatabase } from '../../../server/db';
+import { ApiKey } from '../../../server/models/ApiKey';
+import { hashApiKey } from '../../../server/utils/cryptoKey';
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key');
@@ -59,4 +58,3 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     },
   });
 }
-
