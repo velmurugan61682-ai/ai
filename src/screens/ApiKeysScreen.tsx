@@ -9,6 +9,7 @@ import {
   Modal,
   ActivityIndicator,
   Alert,
+  Platform,
 } from 'react-native';
 import {
   Key,
@@ -729,3 +730,4 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
+

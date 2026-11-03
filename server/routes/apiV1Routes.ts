@@ -22,7 +22,8 @@ apiV1Router.get('/models', requirePermission('models:read'), (req: Authenticated
       quantization: m.quantization,
       contextWindow: m.contextWindow,
       fileSizeMB: m.fileSizeMB,
-      ramRequiredGB: m.ramRequiredGB,
+      minPhysicalRAMGB: m.minPhysicalRAMGB,
+      recommendedAvailableRAMGB: m.recommendedAvailableRAMGB,
       description: m.description,
     })),
   });
@@ -77,3 +78,4 @@ apiV1Router.post(
     });
   }
 );
+

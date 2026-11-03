@@ -71,3 +71,4 @@ ApiKeySchema.index({ keyHash: 1, status: 1 });
 
 export const ApiKey: Model<IApiKey> =
   mongoose.models.ApiKey || mongoose.model<IApiKey>('ApiKey', ApiKeySchema);
+

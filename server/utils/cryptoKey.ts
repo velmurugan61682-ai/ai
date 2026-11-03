@@ -33,3 +33,4 @@ export function generateSecureApiKey(prefix = 'sab_live_'): GeneratedApiKey {
 export function hashApiKey(key: string): string {
   return crypto.createHash('sha256').update(key.trim()).digest('hex');
 }
+

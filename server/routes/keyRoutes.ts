@@ -169,3 +169,4 @@ keyRouter.delete('/:id', async (req: Request, res: Response): Promise<void> => {
     res.status(500).json({ error: 'Internal Server Error', message: error?.message || 'Failed deleting API key.' });
   }
 });
+

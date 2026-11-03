@@ -47,3 +47,4 @@ connectToDatabase()
   });
 
 export default app;
+
