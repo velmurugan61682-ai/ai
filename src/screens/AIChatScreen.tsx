@@ -484,7 +484,16 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
         data={messages}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.messagesContainer}
-        onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+        initialNumToRender={12}
+        maxToRenderPerBatch={10}
+        windowSize={7}
+        removeClippedSubviews={Platform.OS !== 'web'}
+        keyboardShouldPersistTaps="handled"
+        onContentSizeChange={() => {
+          if (messages.length > 0) {
+            flatListRef.current?.scrollToEnd({ animated: true });
+          }
+        }}
         ListEmptyComponent={
           <View style={styles.emptyChatPlaceholder}>
             <Text style={[styles.emptyChatText, { color: colors.textSubtle }]}>

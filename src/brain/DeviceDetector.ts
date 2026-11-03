@@ -24,13 +24,14 @@ export class DeviceDetector {
 
     try {
       // 1. Manufacturer and Model Info
-      const manufacturer = Device.manufacturer || (Platform.OS === 'android' ? 'Android Device' : 'Apple');
-      const modelName = Device.modelName || Device.productName || 'Mobile Hardware';
-      const deviceDesignName = Device.designName || Device.deviceYearClass?.toString() || 'Standard';
+      const isWeb = Platform.OS === 'web';
+      const manufacturer = Device.manufacturer || (isWeb ? 'Desktop/Mobile Browser' : Platform.OS === 'android' ? 'Android Device' : 'Apple');
+      const modelName = Device.modelName || Device.productName || (isWeb ? 'Web Client' : 'Mobile Hardware');
+      const deviceDesignName = Device.designName || Device.deviceYearClass?.toString() || (isWeb ? 'Modern Web Platform' : 'Standard');
 
       // 2. OS Version & API
-      const androidVersion = Device.osVersion || (Platform.OS === 'android' ? 'Android' : 'iOS');
-      const apiLevel = Device.platformApiLevel || 34;
+      const androidVersion = Device.osVersion || (isWeb ? 'Modern Web' : Platform.OS === 'android' ? 'Android' : 'iOS');
+      const apiLevel = Device.platformApiLevel || (isWeb ? 1 : 34);
 
       // 3. Physical RAM
       // In Android, Device.totalMemory queries ActivityManager.MemoryInfo.totalMem.
@@ -100,13 +101,15 @@ export class DeviceDetector {
       const gpuCapabilities =
         Platform.OS === 'android'
           ? 'Qualcomm Adreno / ARM Mali (OpenCL & Vulkan Accelerated)'
+          : Platform.OS === 'web'
+          ? 'WebGL / WebGPU Hardware Accelerated'
           : 'Apple Metal GPU Unified Pipeline';
 
       const info: DeviceHardwareInfo = {
         manufacturer,
         modelName,
         deviceDesignName,
-        androidVersion: `Android ${androidVersion} (API ${apiLevel})`,
+        androidVersion: Platform.OS === 'web' ? 'Web Browser Engine' : `Android ${androidVersion} (API ${apiLevel})`,
         apiLevel,
         totalPhysicalRAMBytes: rawPhysicalRamBytes,
         totalPhysicalRAMGB,

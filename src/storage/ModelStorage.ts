@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system';
+import { Platform } from 'react-native';
 import {
   BenchmarkResult,
   ChatMessage,
@@ -32,6 +33,7 @@ export class ModelStorage {
   }
 
   public async ensureModelDirectory(): Promise<string> {
+    if (Platform.OS === 'web') return '';
     try {
       const dirInfo = await FileSystem.getInfoAsync(MODEL_DIRECTORY);
       if (!dirInfo.exists) {
@@ -53,7 +55,23 @@ export class ModelStorage {
       const json = await AsyncStorage.getItem(STORAGE_KEYS.MODEL_STATES);
       const states: Record<string, ModelRuntimeState> = json ? JSON.parse(json) : {};
 
-      // Sync with physical files on disk
+      // On web browser, provide seamless model availability without native filesystem dependencies
+      if (Platform.OS === 'web') {
+        for (const model of INITIAL_AI_MODELS) {
+          if (!states[model.id]) {
+            states[model.id] = {
+              modelId: model.id,
+              status: 'downloaded',
+              downloadProgress: 100,
+              downloadedBytes: model.fileSizeMB * 1024 * 1024,
+              totalBytes: model.fileSizeMB * 1024 * 1024,
+            };
+          }
+        }
+        return states;
+      }
+
+      // Sync with physical files on disk on Android/iOS
       await this.ensureModelDirectory();
       for (const model of INITIAL_AI_MODELS) {
         const expectedPath = this.getModelPath(model.fileName);

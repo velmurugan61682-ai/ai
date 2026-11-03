@@ -7,7 +7,9 @@ import {
   Text,
   TouchableOpacity,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
+import { ErrorBoundary } from './src/components/ErrorBoundary';
 import {
   Brain,
   MessageSquare,
@@ -215,6 +217,15 @@ export default function App() {
   const selectedModel = (selectedModelId ? getModelById(selectedModelId) : null) || INITIAL_AI_MODELS[0];
   const latestBenchmark = benchmarks.length > 0 ? benchmarks[0] : null;
 
+  const renderLoading = () => (
+    <View style={[styles.loadingContainer, { backgroundColor: colors.background }]}>
+      <ActivityIndicator size="large" color={colors.primary} />
+      <Text style={[styles.loadingText, { color: colors.textMuted }]}>
+        Loading SaaS AI Brain...
+      </Text>
+    </View>
+  );
+
   // Render navigation screen
   const renderCurrentScreen = () => {
     switch (currentScreen) {
@@ -253,7 +264,9 @@ export default function App() {
             onRefresh={refreshHardware}
             onNavigateToRecommendations={() => setCurrentScreen('ModelRegistry')}
           />
-        ) : null;
+        ) : (
+          renderLoading()
+        );
 
       case 'BrainDashboard':
         return hardware ? (
@@ -265,7 +278,9 @@ export default function App() {
             colors={colors}
             onNavigate={(screen) => setCurrentScreen(screen as ScreenId)}
           />
-        ) : null;
+        ) : (
+          renderLoading()
+        );
 
       case 'ModelRegistry':
         return hardware ? (
@@ -280,7 +295,9 @@ export default function App() {
             onSelectModel={handleSelectModel}
             onDeleteModel={handleDeleteModel}
           />
-        ) : null;
+        ) : (
+          renderLoading()
+        );
 
       case 'ModelDownload':
         return (
@@ -378,16 +395,17 @@ export default function App() {
     currentScreen !== 'DeviceDetection';
 
   return (
-    <SafeAreaView style={[styles.root, { backgroundColor: colors.background }]}>
-      <StatusBar
-        barStyle={darkMode ? 'light-content' : 'dark-content'}
-        backgroundColor={colors.background}
-      />
+    <ErrorBoundary fallbackColors={colors}>
+      <SafeAreaView style={[styles.root, { backgroundColor: colors.background }]}>
+        <StatusBar
+          barStyle={darkMode ? 'light-content' : 'dark-content'}
+          backgroundColor={colors.background}
+        />
 
-      <View style={styles.screenWrapper}>{renderCurrentScreen()}</View>
+        <View style={styles.screenWrapper}>{renderCurrentScreen()}</View>
 
-      {/* Global SaaS Bottom Tab Bar */}
-      {showBottomNav && (
+        {/* Global SaaS Bottom Tab Bar */}
+        {showBottomNav && (
         <View style={[styles.tabBar, { backgroundColor: colors.card, borderTopColor: colors.divider }]}>
           <TouchableOpacity
             style={styles.tabItem}
@@ -513,6 +531,7 @@ export default function App() {
         </View>
       )}
     </SafeAreaView>
+  </ErrorBoundary>
   );
 }
 
@@ -522,6 +541,17 @@ const styles = StyleSheet.create({
   },
   screenWrapper: {
     flex: 1,
+  },
+  loadingContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  loadingText: {
+    marginTop: 14,
+    fontSize: 14,
+    fontWeight: '500',
   },
   tabBar: {
     flexDirection: 'row',
