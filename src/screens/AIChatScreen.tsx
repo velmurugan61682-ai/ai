@@ -63,18 +63,21 @@ interface AIChatScreenProps {
   selectedModel: AIModelMetadata | null;
   colors: ThemeColors;
   onOpenModelSelector: () => void;
+  onOpenModelDownload?: (model: AIModelMetadata) => void;
 }
 
 export const AIChatScreen: React.FC<AIChatScreenProps> = ({
   selectedModel,
   colors,
   onOpenModelSelector,
+  onOpenModelDownload,
 }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [currentStreamingText, setCurrentStreamingText] = useState('');
   const [currentTps, setCurrentTps] = useState<number | null>(null);
+  const [modelStatus, setModelStatus] = useState<'not_downloaded' | 'downloaded' | 'loading' | 'ready'>('not_downloaded');
 
   // Voice & TTS State
   const [isListening, setIsListening] = useState(false);
@@ -112,11 +115,43 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
   const activeModel: AIModelMetadata = selectedModel || INITIAL_AI_MODELS[0];
 
   useEffect(() => {
-    // Eagerly ensure model context is ready
-    aiEngine.ensureModelLoaded(activeModel.id).catch((err) => {
-      console.warn('[AIChatScreen] Auto-loading active model notice:', err);
-    });
+    let isMounted = true;
+    async function verifyAndLoadActiveModel() {
+      try {
+        if (Platform.OS === 'android') {
+          const isPresent = await storage.isModelFilePresent(activeModel.fileName);
+          if (!isPresent) {
+            console.log(`[AIChatScreen] Model "${activeModel.name}" is not downloaded yet.`);
+            if (isMounted) setModelStatus('not_downloaded');
+            return;
+          }
 
+          if (aiEngine.isModelLoaded() && aiEngine.getCurrentModelId() === activeModel.id) {
+            console.log(`[AIChatScreen] Model "${activeModel.name}" is already loaded in RAM.`);
+            if (isMounted) setModelStatus('ready');
+            return;
+          }
+
+          if (isMounted) setModelStatus('loading');
+          console.log(`[AIChatScreen] Verified GGUF exists. Loading ${activeModel.name} into native llama.rn...`);
+          await aiEngine.ensureModelLoaded(activeModel.id);
+          if (isMounted) setModelStatus('ready');
+        } else {
+          if (isMounted) setModelStatus('ready');
+        }
+      } catch (err: any) {
+        console.warn('[AIChatScreen] Model load verification notice:', err);
+        if (isMounted) setModelStatus('not_downloaded');
+      }
+    }
+
+    verifyAndLoadActiveModel();
+    return () => {
+      isMounted = false;
+    };
+  }, [activeModel.id]);
+
+  useEffect(() => {
     // Load stored chat history without introducing hardcoded welcome text
     storage.getChatHistory().then((history) => {
       if (history && history.length > 0) {
@@ -319,8 +354,45 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
     setCurrentTps(null);
 
     try {
+      // On Android, check whether the active model GGUF file is physically downloaded
+      if (Platform.OS === 'android') {
+        const isPresent = await storage.isModelFilePresent(activeModel.fileName);
+        if (!isPresent) {
+          setIsGenerating(false);
+          setModelStatus('not_downloaded');
+          const noticeMsg: ChatMessage = {
+            id: `msg-${Date.now()}-not-downloaded`,
+            role: 'assistant',
+            content: `⚠️ **${activeModel.name} is not downloaded yet**\n\nTo run genuine Qwen AI inference 100% offline with zero cloud dependency, ${activeModel.name} (${activeModel.fileSizeMB} MB) must be downloaded to your device storage.\n\nTap the button below to download the verified GGUF model and start offline chatting.`,
+            timestamp: Date.now(),
+            modelName: activeModel.name,
+          };
+          setMessages((prev) => [...prev, noticeMsg]);
+          Alert.alert(
+            'Model Not Downloaded',
+            `${activeModel.name} (${activeModel.fileSizeMB} MB) is required for local offline AI inference. Would you like to start downloading now?`,
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Download Now',
+                onPress: () => {
+                  if (onOpenModelDownload) {
+                    onOpenModelDownload(activeModel);
+                  } else {
+                    onOpenModelSelector();
+                  }
+                },
+              },
+            ]
+          );
+          return;
+        }
+      }
+
       // Ensure active Qwen model is loaded in memory for native inference
+      setModelStatus('loading');
       await aiEngine.ensureModelLoaded(activeModel.id);
+      setModelStatus('ready');
 
       const output = await aiEngine.generateCompletion(
         text,
@@ -471,7 +543,13 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
     >
       <Header
         title="SaaS AI Brain"
-        subtitle={`Active: ${activeModel.name}`}
+        subtitle={
+          modelStatus === 'ready'
+            ? `🟢 ${activeModel.name} Active (Ready)`
+            : modelStatus === 'loading'
+            ? `🟡 Loading ${activeModel.name}...`
+            : `⚠️ ${activeModel.name} (Not Downloaded)`
+        }
         colors={colors}
         rightAction={
           <View style={styles.headerRightActions}>
@@ -542,12 +620,18 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
               ? 'Speaking response aloud...'
               : isListening
               ? `Listening in ${selectedLanguage.name}...`
-              : 'Qwen AI Voice Brain Online'}
+              : modelStatus === 'ready'
+              ? `${activeModel.name} Loaded & Ready (Offline)`
+              : modelStatus === 'loading'
+              ? `Loading ${activeModel.name} into RAM...`
+              : `${activeModel.name} Not Downloaded`}
           </Text>
           <Text style={[styles.robotSubText, { color: colors.textMuted }]}>
             {speakingMessageId
               ? 'Tap robot to pause speech'
-              : 'Type or speak in Tamil, English, or Tanglish'}
+              : modelStatus === 'ready'
+              ? '100% On-Device AI • English, Tamil & Tanglish'
+              : 'Download model from Models tab for offline inference'}
           </Text>
         </View>
 
@@ -773,6 +857,25 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
                 >
                   {item.content}
                 </Text>
+
+                {/* Quick Model Download Button if model not downloaded */}
+                {!isUser && item.content.includes('is not downloaded yet') && (
+                  <TouchableOpacity
+                    style={[styles.quickDownloadBtn, { backgroundColor: colors.primary }]}
+                    onPress={() => {
+                      if (onOpenModelDownload) {
+                        onOpenModelDownload(activeModel);
+                      } else {
+                        onOpenModelSelector();
+                      }
+                    }}
+                  >
+                    <Download size={14} color="#FFFFFF" />
+                    <Text style={styles.quickDownloadText}>
+                      Download {activeModel.name} ({activeModel.fileSizeMB} MB)
+                    </Text>
+                  </TouchableOpacity>
+                )}
 
                 {/* AI Photo Editing Result Card */}
                 {!isUser && item.editedPhoto && (
@@ -1536,6 +1639,21 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   // Attachment & Image Styles
+  quickDownloadBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    marginTop: 12,
+  },
+  quickDownloadText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '600',
+  },
   bubbleAttachmentsContainer: {
     marginBottom: 8,
     gap: 8,

@@ -6,12 +6,14 @@ import { ModelStorage } from '../storage/ModelStorage';
 import { PhotoEditingService } from '../services/PhotoEditingService';
 import { VisionService, VisionAnalysisResult } from '../services/VisionService';
 
-// Dynamically require llama.rn to support native Android while remaining safe in web/bundler contexts
+// Dynamically require llama.rn on native platforms while remaining safe in web/bundler contexts
 let llamaRnModule: any = null;
-try {
-  llamaRnModule = require('llama.rn');
-} catch (e) {
-  console.warn('[AIEngine] llama.rn native module not linked in this context:', e);
+if (Platform.OS !== 'web') {
+  try {
+    llamaRnModule = require('llama.rn');
+  } catch (e) {
+    console.warn('[AIEngine] llama.rn native module not linked or available:', e);
+  }
 }
 
 export interface InferenceMetrics {
@@ -47,8 +49,8 @@ export class AIEngine {
   }
 
   /**
-   * Automatically ensures that the active model is loaded into memory.
-   * On Android, if the model GGUF file is present, initializes the native llama.rn context.
+   * Ensures that the requested model is downloaded and loaded into the native llama.rn context.
+   * Throws an informative error if the model file is not downloaded or native module is unavailable.
    */
   public async ensureModelLoaded(modelId: string = 'qwen3-0.6b'): Promise<boolean> {
     if (this.currentModelId === modelId && this.currentContext && !this.currentContext.stub) {
@@ -56,23 +58,45 @@ export class AIEngine {
     }
 
     const modelMeta = getModelById(modelId);
-    if (!modelMeta) return false;
+    if (!modelMeta) {
+      throw new Error(`Model "${modelId}" is not registered in the model catalog.`);
+    }
 
     const storage = ModelStorage.getInstance();
     const modelFilePath = storage.getModelPath(modelMeta.fileName);
 
-    // On Native Android with llama.rn present
-    if (Platform.OS === 'android' && llamaRnModule && typeof llamaRnModule.initLlama === 'function') {
-      const isDownloaded = await storage.isModelFilePresent(modelMeta.fileName);
-      if (isDownloaded) {
-        console.log(`[AIEngine] Loading native llama.rn context for ${modelMeta.name} from ${modelFilePath}...`);
-        return await this.loadModel(modelId, modelFilePath);
-      } else {
-        console.warn(`[AIEngine] GGUF file not found at ${modelFilePath}`);
+    console.log(`[AIEngine] Ensuring model "${modelMeta.name}" is loaded into memory.`);
+    console.log(`[AIEngine] Target GGUF path: ${modelFilePath}`);
+
+    // Native Android platform
+    if (Platform.OS === 'android') {
+      if (!llamaRnModule || typeof llamaRnModule.initLlama !== 'function') {
+        throw new Error(
+          'Native llama.rn inference module is not linked or unavailable in this Android build.'
+        );
       }
+
+      const isDownloaded = await storage.isModelFilePresent(modelMeta.fileName);
+      if (!isDownloaded) {
+        throw new Error(
+          `Model "${modelMeta.name}" (${modelMeta.fileSizeMB} MB) is not downloaded to device storage. Please download the model first from the Models tab.`
+        );
+      }
+
+      console.log(`[AIEngine] Verified GGUF file exists on device. Initializing native llama.rn context...`);
+      return await this.loadModel(modelId, modelFilePath);
     }
 
-    // Set active stub for non-Android / development environment
+    // Web / non-Android platforms
+    if (Platform.OS === 'web') {
+      console.log('[AIEngine] Running in web platform mode.');
+      if (!this.currentContext || this.currentModelId !== modelId) {
+        this.currentContext = { stub: true, modelId, modelFilePath };
+        this.currentModelId = modelId;
+      }
+      return true;
+    }
+
     if (!this.currentContext || this.currentModelId !== modelId) {
       this.currentContext = { stub: true, modelId, modelFilePath };
       this.currentModelId = modelId;
@@ -87,32 +111,52 @@ export class AIEngine {
   public async loadModel(modelId: string, modelFilePath: string): Promise<boolean> {
     try {
       if (this.currentModelId === modelId && this.currentContext && !this.currentContext.stub) {
+        console.log(`[AIEngine] Model "${modelId}" is already active and loaded in memory.`);
         return true;
       }
 
-      // Unload previous model from RAM/VRAM
+      console.log(`[AIEngine] Unloading previous model context before loading ${modelId}...`);
       await this.unloadCurrentModel();
 
       const modelMeta = getModelById(modelId);
       const contextSize = modelMeta?.contextWindow || 2048;
 
       if (llamaRnModule && typeof llamaRnModule.initLlama === 'function') {
-        console.log(`[AIEngine] Initializing native llama context for ${modelId} at ${modelFilePath}...`);
-        this.currentContext = await llamaRnModule.initLlama({
-          model: modelFilePath,
-          use_mlock: true,
-          n_ctx: contextSize,
-          n_gpu_layers: 1, // Enable GPU layer offloading (Adreno / Mali OpenCL)
-        });
+        console.log(`[AIEngine] Calling llama.rn initLlama for ${modelId} (${modelMeta?.name || ''})...`);
+        console.log(`[AIEngine] Config: model="${modelFilePath}", n_ctx=${contextSize}, use_mlock=false`);
+
+        // First attempt: GPU layer offloading (Adreno OpenCL / Mali)
+        try {
+          this.currentContext = await llamaRnModule.initLlama({
+            model: modelFilePath,
+            n_ctx: contextSize,
+            n_gpu_layers: 99,
+            use_mlock: false, // Prevents Android kernel memory lock limit failures on unrooted devices
+          });
+          console.log(
+            `[AIEngine] ✅ Native llama.rn context loaded! ID: ${this.currentContext?.id}, GPU: ${this.currentContext?.gpu}, ReasonNoGPU: ${this.currentContext?.reasonNoGPU || 'None'}`
+          );
+        } catch (gpuError: any) {
+          console.warn(`[AIEngine] GPU init failed (${gpuError?.message}), falling back to CPU inference...`);
+          this.currentContext = await llamaRnModule.initLlama({
+            model: modelFilePath,
+            n_ctx: contextSize,
+            n_gpu_layers: 0,
+            use_mlock: false,
+          });
+          console.log(`[AIEngine] ✅ Native llama.rn CPU context loaded! ID: ${this.currentContext?.id}`);
+        }
       } else {
-        console.log(`[AIEngine] Native llama module stub active for ${modelId}`);
+        if (Platform.OS === 'android') {
+          throw new Error('Native llama.rn module is not linked in this Android build.');
+        }
         this.currentContext = { stub: true, modelId, modelFilePath };
       }
 
       this.currentModelId = modelId;
       return true;
-    } catch (error) {
-      console.error('[AIEngine] Error loading model:', error);
+    } catch (error: any) {
+      console.error('[AIEngine] ❌ Error loading model into memory:', error);
       await this.unloadCurrentModel();
       throw error;
     }
@@ -125,6 +169,7 @@ export class AIEngine {
     if (this.currentContext) {
       try {
         if (typeof this.currentContext.release === 'function') {
+          console.log(`[AIEngine] Releasing native llama context ID: ${this.currentContext.id}`);
           await this.currentContext.release();
         }
       } catch (err) {
@@ -136,7 +181,8 @@ export class AIEngine {
   }
 
   /**
-   * Runs local inference on the loaded model offline with conversation history.
+   * Runs local inference on the loaded Qwen model offline with conversation history.
+   * Never returns fake placeholder templates.
    */
   public async generateCompletion(
     userPrompt: string,
@@ -151,7 +197,16 @@ export class AIEngine {
     editedPhoto?: PhotoEditRecord;
   }> {
     if (this.isGenerating) {
-      throw new Error('Inference is currently active. Please wait.');
+      throw new Error('Inference is currently active. Please wait for the current response to finish.');
+    }
+
+    // Verify native context is loaded on Android
+    if (Platform.OS === 'android') {
+      if (!this.currentContext || this.currentContext.stub || typeof this.currentContext.completion !== 'function') {
+        throw new Error(
+          `Model "${this.currentModelId || 'Qwen3 0.6B'}" is not loaded in memory. Please ensure the model file is downloaded and tap to activate.`
+        );
+      }
     }
 
     this.isGenerating = true;
@@ -179,7 +234,7 @@ export class AIEngine {
         lowerPrompt.includes('filter') ||
         lowerPrompt.includes('style'));
 
-    // 1. AI Photo Editing Pipeline
+    // 1. AI Photo Editing Pipeline (if user uploads photo and requests edit)
     if (isPhotoEditIntent) {
       try {
         const targetImg = imageAttachments[0];
@@ -216,13 +271,11 @@ export class AIEngine {
       }
     }
 
-    // 2. Multimodal Vision Analysis for Uploaded Images
-    let visionAnalysis: VisionAnalysisResult | undefined;
+    // 2. Multimodal Vision Context for Uploaded Images
     let effectiveUserPrompt = userPrompt;
-
     if (imageAttachments.length > 0) {
       const targetImg = imageAttachments[0];
-      visionAnalysis = await VisionService.getInstance().analyzeImage(targetImg, userPrompt);
+      const visionAnalysis = await VisionService.getInstance().analyzeImage(targetImg, userPrompt);
       effectiveUserPrompt = VisionService.getInstance().buildVisionPrompt(userPrompt, visionAnalysis, targetImg);
     }
 
@@ -236,17 +289,17 @@ export class AIEngine {
     }
 
     const langInfo = LanguageService.getInstance().detectLanguage(userPrompt || effectiveUserPrompt);
+    
+    // Qwen3 Chat System Prompt
     const systemPrompt =
       customSystemPrompt ||
-      `You are SaaS AI Brain, a helpful, honest, and intelligent on-device AI assistant.
-Language instructions:
-- Detect the user's language and respond naturally in that exact language (${langInfo.name}).
-- If the user uses Tanglish (Tamil written in Latin script, e.g. "Rendu Pepsi add pannu", "Epdi irukinga", "Enna panreenga"), answer fluently and naturally in Tanglish or Tamil.
-- If the user asks about their personal schedule, private calendar, or daily tasks (e.g. "Today what am I working on?", "Today what i am wrk tell mr"), honestly explain that you do not have access to their private schedule, calendar, or external work accounts, but offer to help organize their day or list their tasks.
-- For billing commands (e.g. "Rendu Pepsi add pannu"), confirm the item and quantity clearly.
-- For uploaded images and documents, answer questions accurately based on the visual and extracted text context.
-- Answer questions helpfully, accurately, and contextually. Never use generic filler templates.
-- Maintain full conversation context from prior messages.`;
+      `You are Qwen, a helpful, honest, concise, and intelligent offline AI assistant running locally on the user's mobile device hardware.
+Language Instructions:
+- Answer naturally in the user's language (${langInfo.name}).
+- If the user communicates in Tamil or Tanglish (Tamil in English script), respond fluently in Tamil or Tanglish.
+- If asked about personal schedule, private calendar, or daily tasks that you cannot access, honestly state that you do not have access to their external private accounts, and offer to help organize their tasks.
+- For math, science, and factual questions, provide direct, accurate, and step-by-step answers without evasion.
+- Answer helpfully and contextually. Do not use boilerplate or filler text.`;
 
     // Check for Tamil / Tanglish Billing & Order intent
     const structuredBilling = this.parseBillingOrInventoryIntent(userPrompt || '');
@@ -257,25 +310,30 @@ Language instructions:
         !this.currentContext.stub &&
         typeof this.currentContext.completion === 'function'
       ) {
-        // Build Qwen ChatML prompt with conversation history for full multi-turn memory
+        // Build exact Qwen ChatML prompt structure with multi-turn history
         let formattedPrompt = `<|im_start|>system\n${systemPrompt}<|im_end|>\n`;
         const recentHistory = (conversationHistory || []).slice(-8);
         for (const msg of recentHistory) {
           if (msg.role === 'user') {
             formattedPrompt += `<|im_start|>user\n${msg.content}<|im_end|>\n`;
           } else if (msg.role === 'assistant') {
-            formattedPrompt += `<|im_start|>assistant\n${msg.content}<|im_end|>\n`;
+            // Strip any system prefixes or errors from prior turns
+            const cleanContent = msg.content.replace(/^⚠️.*?\n\n/s, '');
+            formattedPrompt += `<|im_start|>assistant\n${cleanContent}<|im_end|>\n`;
           }
         }
         formattedPrompt += `<|im_start|>user\n${effectiveUserPrompt}<|im_end|>\n<|im_start|>assistant\n`;
 
-        console.log('[AIEngine] Executing native llama.rn Qwen completion...');
+        console.log(`[AIEngine] Submitting prompt to llama.rn native Qwen model (${this.currentModelId})...`);
+        console.log(`[AIEngine] Formatted ChatML Prompt:\n${formattedPrompt}`);
+
         const result = await this.currentContext.completion(
           {
             prompt: formattedPrompt,
-            n_predict: 384,
+            n_predict: 512,
             temperature: 0.7,
-            stop: ['<|im_end|>', '</s>', '<|eot_id|>', '<|im_start|>', 'User:', 'Assistant:'],
+            top_p: 0.9,
+            stop: ['<|im_end|>', '<|endoftext|>', '<|im_start|>', 'User:', 'user\n'],
           },
           (data: { token: string }) => {
             if (data?.token) {
@@ -290,43 +348,40 @@ Language instructions:
         );
 
         fullResponse = result?.text || fullResponse;
-      } else {
-        // Natural conversational response generator for development / environment testing
-        const generated = this.generateConversationalResponse(
-          userPrompt,
-          conversationHistory,
-          structuredBilling,
-          visionAnalysis,
-          documentAttachments
+        // Clean any trailing stop tokens
+        fullResponse = fullResponse
+          .replace(/<\|im_end\|>/g, '')
+          .replace(/<\|endoftext\|>/g, '')
+          .trim();
+
+        const totalTimeMs = Math.max(1, Date.now() - startTime);
+        const ttft = firstTokenTime > 0 ? firstTokenTime - startTime : Math.min(80, totalTimeMs);
+        const tps = parseFloat(((tokenCount / totalTimeMs) * 1000).toFixed(1));
+
+        console.log(
+          `[AIEngine] ✅ Inference complete! Generated ${tokenCount} tokens in ${totalTimeMs}ms (${tps} tps, TTFT: ${ttft}ms).`
         );
-        const tokens = generated.split(' ');
-        for (let i = 0; i < tokens.length; i++) {
-          const chunk = (i === 0 ? '' : ' ') + tokens[i];
-          if (tokenCount === 0) firstTokenTime = Date.now();
-          tokenCount++;
-          fullResponse += chunk;
-          if (onToken) onToken(chunk);
-          await new Promise((r) => setTimeout(r, 18));
-        }
+        console.log(`[AIEngine] Generated Output:\n${fullResponse}`);
+
+        return {
+          text: fullResponse,
+          metrics: {
+            timeToFirstTokenMs: ttft,
+            tokensPerSecond: tps > 0 ? tps : 30.0,
+            totalTimeMs,
+            totalTokens: tokenCount,
+          },
+          structuredData: structuredBilling,
+        };
+      } else {
+        // Native llama.rn context is missing
+        console.error('[AIEngine] Native llama.rn is not loaded in this session.');
+        throw new Error(
+          'On-device Qwen inference requires the model to be downloaded and active in native memory.'
+        );
       }
-
-      const totalTimeMs = Math.max(1, Date.now() - startTime);
-      const ttft = firstTokenTime > 0 ? firstTokenTime - startTime : Math.min(120, totalTimeMs);
-      const tps = parseFloat(((tokenCount / totalTimeMs) * 1000).toFixed(1));
-
-      return {
-        text: fullResponse.trim(),
-        metrics: {
-          timeToFirstTokenMs: ttft,
-          tokensPerSecond: tps > 0 ? tps : 28.5,
-          totalTimeMs,
-          totalTokens: tokenCount,
-        },
-        structuredData: structuredBilling,
-      };
     } catch (err: any) {
-      console.error('[AIEngine] Inference failed:', err);
-      // Propagate the actual error so the UI displays the true failure reason
+      console.error('[AIEngine] ❌ Inference execution error:', err);
       throw new Error(`Inference engine error: ${err?.message || 'Model execution failed'}`);
     } finally {
       this.isGenerating = false;
@@ -451,189 +506,5 @@ Language instructions:
     }
 
     return null;
-  }
-
-  /**
-   * Contextual, natural language generator used when native llama.rn is initializing or in dev/web.
-   * Completely avoids generic filler templates like "Processed query: ...".
-   */
-  private generateConversationalResponse(
-    prompt: string,
-    history: ChatMessage[] = [],
-    billing: BillingStructure | null,
-    visionAnalysis?: VisionAnalysisResult,
-    documentAttachments: ChatAttachment[] = []
-  ): string {
-    const text = (prompt || '').toLowerCase().trim();
-    const langInfo = LanguageService.getInstance().detectLanguage(prompt || '');
-
-    // 0. Image Vision Understanding & Q&A
-    if (visionAnalysis) {
-      if (visionAnalysis.detectedCategory === 'receipt_billing') {
-        const bill = visionAnalysis.extractedDetails.billingDetails;
-        const total = bill?.totalDetected || 160;
-        const items = bill?.itemsDetected || [
-          { name: 'Beverage Unit', price: 40 },
-          { name: 'Grocery Pack', price: 120 },
-        ];
-        return (
-          `📄 **Receipt / Billing Analysis**\n\n` +
-          `• **Store / Source**: ${bill?.storeName || 'Edge Retail POS'}\n` +
-          `• **Line Items Detected**:\n` +
-          items.map((it) => `  - ${it.name}: ₹${it.price}`).join('\n') +
-          `\n• **Calculated Total**: ₹${total}\n` +
-          `• **Status**: Verified and extracted from image.\n\n` +
-          `Would you like to log these entries into your inventory or export this expense?`
-        );
-      }
-
-      if (visionAnalysis.detectedCategory === 'product_catalog') {
-        return (
-          `📦 **Product Inventory Analysis**\n\n` +
-          `• **Detected Elements**: ${visionAnalysis.extractedDetails.visibleElements?.join(', ') || 'Packaged product'}\n` +
-          `• **Labels & Text**: ${visionAnalysis.extractedDetails.detectedTextBlocks?.join(' | ') || 'Packaging typography'}\n` +
-          `• **Image Spec**: ${visionAnalysis.extractedDetails.dimensions} (Aspect: ${visionAnalysis.extractedDetails.aspectRatio})\n\n` +
-          `I can help you add this SKU to your local store catalog, write product copy, or format inventory tags.`
-        );
-      }
-
-      if (visionAnalysis.detectedCategory === 'document_ui') {
-        return (
-          `📱 **UI & Screen Capture Analysis**\n\n` +
-          `• **Layout**: Application UI / Dashboard view (${visionAnalysis.extractedDetails.dimensions})\n` +
-          `• **Key Components**: ${visionAnalysis.extractedDetails.visibleElements?.join(', ')}\n` +
-          `• **Summary**: ${visionAnalysis.summary}\n\n` +
-          `Feel free to ask specific questions about the screen elements, layout, or displayed data.`
-        );
-      }
-
-      return (
-        `🖼️ **Visual Content Analysis**\n\n` +
-        `• **Subject & Composition**: ${visionAnalysis.summary}\n` +
-        `• **Visual Elements**: ${visionAnalysis.extractedDetails.visibleElements?.join(', ')}\n` +
-        `• **Dimensions**: ${visionAnalysis.extractedDetails.dimensions}\n\n` +
-        `You can ask me questions about this image or prompt me to edit it (e.g. "Change the background to blue", "Remove background", "Cartoon style", or "Make photo look professional")!`
-      );
-    }
-
-    // 0b. Document Analysis (PDF, TXT, CSV, XLSX, DOCX)
-    if (documentAttachments && documentAttachments.length > 0) {
-      const doc = documentAttachments[0];
-      const previewText = (doc.extractedText || '').trim();
-      const isCsvOrSpreadsheet = doc.name.toLowerCase().endsWith('.csv') || doc.name.toLowerCase().endsWith('.xlsx');
-
-      if (isCsvOrSpreadsheet) {
-        return (
-          `📊 **Spreadsheet Data Analysis: ${doc.name}**\n\n` +
-          `• **File Type**: Tabular Dataset (${doc.size ? (doc.size / 1024).toFixed(1) + ' KB' : 'Spreadsheet'})\n` +
-          `• **Extracted Data Preview**:\n\`\`\`\n` +
-          (previewText.slice(0, 400) || 'Headers and rows parsed successfully.') +
-          `\n\`\`\`\n\n` +
-          `I can calculate column totals, find anomalies, summarize key metrics, or extract specific rows from this dataset.`
-        );
-      }
-
-      return (
-        `📋 **Document Summary: ${doc.name}**\n\n` +
-        `• **File**: ${doc.name} (${doc.mimeType || 'Document'})\n` +
-        `• **Content Extract**:\n` +
-        `"${previewText.slice(0, 350)}${previewText.length > 350 ? '...' : ''}"\n\n` +
-        `I am ready to summarize key takeaways, answer specific questions, or draft action items from this document!`
-      );
-    }
-
-    // 1. Order / Billing intent
-    if (billing && billing.type === 'order_intent') {
-      const item = billing.items[0];
-      if (langInfo.code === 'ta-Latn') {
-        return `Kandippa! Draft cart-la add pannitten: ${item.quantity} × ${item.itemName} (Estimated: ₹${item.totalEstimate}).\n\nOrder confirm panna keezha irukura "Confirm Order" button tap pannunga!`;
-      } else if (langInfo.code === 'ta') {
-        return `நிச்சயமாக! கார்ட்டில் சேர்க்கப்பட்டது: ${item.quantity} × ${item.itemName} (மதிப்பிடப்பட்ட தொகை: ₹${item.totalEstimate}).\n\nஆர்டரை உறுதிப்படுத்த "Confirm Order" பொத்தானைத் தட்டவும்!`;
-      } else if (langInfo.code === 'hi-Latn' || langInfo.code === 'hi') {
-        return `ज़रूर! कार्ट में जोड़ दिया गया है: ${item.quantity} × ${item.itemName} (अनुमानित मूल्य: ₹${item.totalEstimate}).\n\nऑर्डर की पुष्टि के लिए "Confirm Order" बटन दबाएं!`;
-      }
-      return `Sure! Added to draft cart: ${item.quantity} × ${item.itemName} (Estimated: ₹${item.totalEstimate}).\n\nClick "Confirm Order" below to commit changes to local inventory.`;
-    }
-
-    // 2. Personal schedule / Daily work questions (e.g. "Today what i am wrk tell mr", "What am I working on today?")
-    const isPersonalWorkQuery =
-      /\b(today.*(wrk|work|doing|task|agenda|schedule)|what.*(i|am i).*work|what.*my.*(task|work|schedule)|work.*today|tasks.*today)\b/i.test(
-        text
-      ) ||
-      text.includes('innaiku enna vela') ||
-      text.includes('innaiku enna work') ||
-      text.includes('aaj mera kya kaam');
-
-    if (isPersonalWorkQuery) {
-      if (langInfo.code === 'ta-Latn') {
-        return `Unga personal calendar, work schedule, illa private tasks pathi enakku access illa. Naan unga phone hardware-la 100% offline-ah run aagura private AI assistant.\n\nAana innaiku ungalukku enna tasks or projects irukko adhula enkitta sonneenga na, ungalukku prioritize panni, step-by-step schedule structure panna kandippa help panren! Enna task mudikanum?`;
-      } else if (langInfo.code === 'ta') {
-        return `உங்கள் தனிப்பட்ட பணி அட்டவணை, காலண்டர் அல்லது அலுவலகப் பணிகளைப் பற்றிய தகவல் என்னிடம் இல்லை. சாதனத்திலேயே இயங்கும் பாதுகாப்பான ஆஃப்லைன் AI-யாக உங்கள் தனிப்பட்ட கணக்குகளை என்னால் அணுக முடியாது.\n\nஆனால், இன்று நீங்கள் செய்து முடிக்க வேண்டிய பணிகள் அல்லது குறிப்புகளை என்னிடம் கூறினால், அவற்றை திட்டமிடவும் ஒழுங்கமைக்கவும் நான் மகிழ்ச்சியுடன் உதவுகிறேன்!`;
-      }
-      return `I don't have access to your personal calendar, work tracker, or private schedule. Because I run 100% locally on your device hardware to protect your privacy, I cannot view external work accounts.\n\nHowever, if you tell me what tasks, projects, or goals you want to tackle today, I'd be glad to help you prioritize them, create a structured work plan, or draft a checklist!`;
-    }
-
-    // 3. Follow-up / Conversation Memory queries
-    const isFollowUpQuery =
-      /\b(what did i ask|previous question|last message|before this|what was my last|munnadi enna ketten|innum sollu|explain more|elaborate)\b/i.test(
-        text
-      );
-
-    if (isFollowUpQuery && history && history.length > 0) {
-      const userHistory = history.filter((m) => m.role === 'user');
-      const lastUserMsg = userHistory.length > 0 ? userHistory[userHistory.length - 1].content : '';
-      const assistantHistory = history.filter((m) => m.role === 'assistant');
-      const lastAssistantMsg = assistantHistory.length > 0 ? assistantHistory[assistantHistory.length - 1].content : '';
-
-      if (text.includes('explain more') || text.includes('innum sollu') || text.includes('elaborate')) {
-        return `Expanding on our discussion about "${lastUserMsg}":\n\n` +
-          `Key aspects to consider:\n` +
-          `1. Implementation details: Applying this directly to your current workflow.\n` +
-          `2. Practical benefits: Reduced cycle time, zero cloud latency, and full data privacy.\n` +
-          `3. Next steps: We can break this down into specific action items whenever you are ready!`;
-      }
-
-      if (langInfo.code === 'ta-Latn') {
-        return `Unga previous question: "${lastUserMsg}". Adhuku naan kudutha badhil unga conversation history-la irukku. Idhula aduthu enna clarify pannanum?`;
-      }
-      return `Your previous question was: "${lastUserMsg}". We were discussing that just now. Would you like to dive deeper into any specific part of it?`;
-    }
-
-    // 4. Greetings and Introductions
-    if (
-      text.includes('hello') ||
-      text.includes('introduce') ||
-      text.includes('who are you') ||
-      text.includes('vanakkam') ||
-      text.includes('namaste')
-    ) {
-      if (langInfo.code === 'ta-Latn') {
-        return `Vanakkam! Naan SaaS AI Brain. Unga mobile hardware-laye 100% offline-ah run aagura local quantized AI assistant. Enakku English, Tamil, Tanglish ellam nallave puriyum. Cloud reliance illama zero latency-la instant responses tharuven. Enna help venum?`;
-      } else if (langInfo.code === 'ta') {
-        return `வணக்கம்! நான் SaaS AI Brain. உங்கள் மொபைல் போனிலேயே 100% பாதுகாப்பாகவும் இன்டர்நெட் இல்லாமலும் இயங்கும் ஆஃப்லைன் செயற்கை நுண்ணறிவு உதவியாளர். உங்களுக்கு உதவ நான் தயாராக உள்ளேன்!`;
-      } else if (langInfo.code === 'hi') {
-        return `नमस्ते! मैं SaaS AI Brain हूँ, आपका ऑन-डिवाइस ऑफलाइन एआई सहायक जो बिना इंटरनेट के सीधे आपके फोन पर चलता है। बताइए, मैं आपकी क्या सहायता कर सकता हूँ?`;
-      }
-      return `Hello! I am SaaS AI Brain, an offline on-device AI assistant powered by local quantized SLMs. I run 100% directly on your device hardware without requiring internet, protecting your privacy and providing instant responses in English, Tamil, Tanglish, and more. How can I help you today?`;
-    }
-
-    // 5. Inventory Management Explanation
-    if (text.includes('inventory management') || text.includes('inventory pathi')) {
-      if (langInfo.code === 'ta-Latn') {
-        return `Inventory management na business-oda stock, materials, and goods-ah efficiently track and control panra system.\n\nMukkiyamana Pillars:\n1. Stock Tracking: Eppovum store-la evlo stock irukku nu live count theriyum.\n2. Reorder Point (ROP): Stock out aagama mun kootiye reorder panradhu.\n3. FIFO (First-In, First-Out): Pazhaya stock muthalla sell aagum, perishable items expire aagadhu.\n4. ABC Analysis: High-value items-kku high priority tharuvadhu.\n\nSaaS AI Brain unga mobile hardware-la offline billing & inventory voice parsing provide pannum!`;
-      }
-      return `Inventory management is the systematic process of ordering, storing, tracking, and controlling a business's stock.\n\nKey Pillars:\n1. Stock Tracking: Real-time visibility of units on hand across all categories.\n2. Reorder Point (ROP): Calculating safety stock levels to prevent stockouts before shipments arrive.\n3. FIFO / LIFO: First-In-First-Out ensures older items sell first, preventing spoilage.\n4. ABC Analysis: Prioritizing high-value turnover items (A) over bulk low-cost items (C).\n\nSaaS AI Brain enables offline edge point-of-sale inventory parsing right on your phone hardware.`;
-    }
-
-    // 6. Natural Language Conversational Fallback (Tailored to Language, NOT a generic placeholder)
-    if (langInfo.code === 'ta-Latn') {
-      return `Unga kelvi "${prompt}" pathi ketteenga. SaaS AI Brain unga phone-la offline-ah evaluate pannidhu. Idhula ungalukku specific calculations, action plan, illa inventory structure venuma? Solleenga, adhai panni tharen!`;
-    } else if (langInfo.code === 'ta') {
-      return `உங்கள் கேள்வி "${prompt}". இதற்கு தேவையான விரிவான தகவல்களை அல்லது பணித்திட்டத்தை உருவாக்க நான் உங்களுக்கு உதவ முடியும். இதில் அடுத்ததாக உங்களுக்கு என்ன தேவை என்பதை கூறவும்!`;
-    } else if (langInfo.code === 'hi') {
-      return `आपका प्रश्न "${prompt}" प्राप्त हुआ। इस विषय पर विस्तृत जानकारी या कार्य योजना तैयार करने में मैं आपकी पूरी मदद कर सकता हूँ। बताइए अगला कदम क्या होना चाहिए?`;
-    }
-
-    return `Regarding "${prompt}": As an offline on-device AI assistant, I can help you analyze this, break it down into actionable steps, or draft documentation. Would you like a detailed breakdown, bullet points, or practical examples?`;
   }
 }

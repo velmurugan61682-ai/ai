@@ -329,6 +329,7 @@ export default function App() {
             selectedModel={selectedModel}
             colors={colors}
             onOpenModelSelector={() => setCurrentScreen('ModelSelection')}
+            onOpenModelDownload={(model) => handleDownloadModel(model)}
           />
         );
 
