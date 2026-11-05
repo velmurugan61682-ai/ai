@@ -68,6 +68,7 @@ export class ModelStorage {
 
       // On web browser, provide seamless model availability without native filesystem dependencies
       if (Platform.OS === 'web') {
+        let hasChanges = false;
         for (const model of INITIAL_AI_MODELS) {
           if (!states[model.id]) {
             states[model.id] = {
@@ -76,8 +77,16 @@ export class ModelStorage {
               downloadProgress: 100,
               downloadedBytes: model.fileSizeMB * 1024 * 1024,
               totalBytes: model.fileSizeMB * 1024 * 1024,
+              localPath: `web://${model.fileName}`,
             };
+            hasChanges = true;
+          } else if (states[model.id].status === 'downloaded' && !states[model.id].localPath) {
+            states[model.id].localPath = `web://${model.fileName}`;
+            hasChanges = true;
           }
+        }
+        if (hasChanges) {
+          await this.saveModelStates(states);
         }
         return states;
       }

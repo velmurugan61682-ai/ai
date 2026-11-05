@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { AIModelMetadata, ModelRuntimeState } from '../models/modelTypes';
 import { INITIAL_AI_MODELS, getModelById } from '../models/modelRegistry';
 import { ModelStorage } from '../storage/ModelStorage';
@@ -33,12 +34,17 @@ export class ModelSelector {
     const states = await this.storage.getModelStates();
     const state: ModelRuntimeState | undefined = states[modelId];
 
-    if (!state || state.status !== 'downloaded' || !state.localPath) {
+    if (!state || state.status !== 'downloaded') {
+      throw new Error(`Model ${model.name} must be downloaded before selection.`);
+    }
+
+    const localPath = state.localPath || (Platform.OS === 'web' ? `web://${model.fileName}` : '');
+    if (!localPath && Platform.OS !== 'web') {
       throw new Error(`Model ${model.name} must be downloaded before selection.`);
     }
 
     // Load into AI engine
-    await this.aiEngine.loadModel(modelId, state.localPath);
+    await this.aiEngine.loadModel(modelId, localPath);
     await this.storage.setSelectedModelId(modelId);
     return true;
   }

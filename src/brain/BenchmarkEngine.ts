@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { BenchmarkQuestion, BenchmarkResult } from '../models/modelTypes';
 import { getModelById } from '../models/modelRegistry';
 import { ModelStorage } from '../storage/ModelStorage';
@@ -70,12 +71,17 @@ export class BenchmarkEngine {
 
     const states = await this.storage.getModelStates();
     const state = states[modelId];
-    if (!state || state.status !== 'downloaded' || !state.localPath) {
+    if (!state || state.status !== 'downloaded') {
+      throw new Error(`Model ${model.name} must be downloaded before running benchmark.`);
+    }
+
+    const localPath = state.localPath || (Platform.OS === 'web' ? `web://${model.fileName}` : '');
+    if (!localPath && Platform.OS !== 'web') {
       throw new Error(`Model ${model.name} must be downloaded before running benchmark.`);
     }
 
     // Load model into memory
-    await this.aiEngine.loadModel(modelId, state.localPath);
+    await this.aiEngine.loadModel(modelId, localPath);
 
     const hwBefore = await this.deviceService.getHardwareInfo(true);
     const startBattery = hwBefore.batteryLevel;

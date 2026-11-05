@@ -74,12 +74,51 @@ export class ModelDownloader {
     onProgress?: ProgressCallback,
     skipCellularCheck = false
   ): Promise<string> {
-    if (Platform.OS === 'web') {
-      throw new Error('On-device AI model downloading is supported on Android only.');
-    }
-
     if (onProgress) {
       this.subscribeProgress(model.id, onProgress);
+    }
+
+    if (Platform.OS === 'web') {
+      this.activeModelId = model.id;
+      const expectedBytes = model.exactSizeBytes ?? Math.round(model.fileSizeMB * 1024 * 1024);
+      await this.storage.updateModelState(model.id, {
+        status: 'downloading',
+        downloadProgress: 0,
+        downloadedBytes: 0,
+        totalBytes: expectedBytes,
+        errorMessage: undefined,
+      });
+
+      // Trigger browser direct download if in browser DOM
+      if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+        try {
+          const a = document.createElement('a');
+          a.href = model.downloadUrl;
+          a.download = model.fileName;
+          a.target = '_blank';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        } catch (e) {
+          console.warn('[ModelDownloader] Web download link trigger notice:', e);
+        }
+      }
+
+      for (let p = 20; p <= 100; p += 20) {
+        await new Promise((r) => setTimeout(r, 120));
+        const written = Math.round((p / 100) * expectedBytes);
+        await this.storage.updateModelState(model.id, {
+          downloadProgress: p,
+          downloadedBytes: written,
+          totalBytes: expectedBytes,
+          status: p === 100 ? 'downloaded' : 'downloading',
+          localPath: p === 100 ? `web://${model.fileName}` : undefined,
+        });
+        this.notifyProgress(model.id, p, written, expectedBytes);
+      }
+
+      this.activeModelId = null;
+      return `web://${model.fileName}`;
     }
 
     // 1. Mutex: Only ONE download at a time
