@@ -166,6 +166,43 @@ export class TiyoEmployeeService {
     } catch {}
   }
 
+  public addToCart(itemName: string, quantity: number = 1, unitPrice: number = 30): ShopCartItem {
+    const existingIndex = this.cart.findIndex(
+      (item) => item.name.toLowerCase() === itemName.toLowerCase()
+    );
+
+    if (existingIndex >= 0) {
+      this.cart[existingIndex].quantity += quantity;
+      this.cart[existingIndex].totalPrice = this.cart[existingIndex].quantity * this.cart[existingIndex].unitPrice;
+      this.lastMentionedItem = this.cart[existingIndex];
+      this.persistCart();
+      return this.cart[existingIndex];
+    } else {
+      const newItem: ShopCartItem = {
+        id: `c_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        name: itemName,
+        quantity,
+        unitPrice,
+        totalPrice: quantity * unitPrice,
+        unit: 'unit',
+      };
+      this.cart.push(newItem);
+      this.lastMentionedItem = newItem;
+      this.persistCart();
+      return newItem;
+    }
+  }
+
+  public removeFromCart(itemName: string): boolean {
+    const initialLen = this.cart.length;
+    this.cart = this.cart.filter(
+      (item) => !item.name.toLowerCase().includes(itemName.toLowerCase()) && !itemName.toLowerCase().includes(item.name.toLowerCase())
+    );
+    this.lastMentionedItem = this.cart.length > 0 ? this.cart[this.cart.length - 1] : null;
+    this.persistCart();
+    return this.cart.length < initialLen;
+  }
+
   private async persistCart() {
     try {
       await AsyncStorage.setItem(STORAGE_KEYS.TIYO_CART, JSON.stringify(this.cart));
@@ -183,6 +220,10 @@ export class TiyoEmployeeService {
 
   public getLowStockProducts(): InventoryProduct[] {
     return this.products.filter((p) => p.stock <= p.minThreshold);
+  }
+
+  public getLowStockItems(): InventoryProduct[] {
+    return this.getLowStockProducts();
   }
 
   public getSalesSummary(): ShopSalesSummary {

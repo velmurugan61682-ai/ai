@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image } from 'react-native';
 import { Cpu, ShieldCheck, Zap, ArrowRight, Sparkles, CheckCircle2 } from 'lucide-react-native';
 import { ThemeColors } from '../theme/theme';
+import { INITIAL_AI_MODELS } from '../models/modelRegistry';
 
 interface WelcomeScreenProps {
   colors: ThemeColors;
@@ -74,25 +75,15 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ colors, onGetStart
 
       {/* Pre-installed models summary */}
       <View style={[styles.modelsSummaryCard, { backgroundColor: colors.surface }]}>
-        <Text style={[styles.summaryTitle, { color: colors.text }]}>Compatible Initial Models:</Text>
-        <View style={styles.modelRow}>
-          <CheckCircle2 size={16} color={colors.primary} />
-          <Text style={[styles.modelText, { color: colors.text }]}>
-            <Text style={{ fontWeight: '700' }}>Qwen3 0.6B</Text> (Ultra-light, ~398MB, low memory)
-          </Text>
-        </View>
-        <View style={styles.modelRow}>
-          <CheckCircle2 size={16} color={colors.primary} />
-          <Text style={[styles.modelText, { color: colors.text }]}>
-            <Text style={{ fontWeight: '700' }}>Qwen3 1.7B</Text> (High reasoning & Tanglish depth)
-          </Text>
-        </View>
-        <View style={styles.modelRow}>
-          <CheckCircle2 size={16} color={colors.primary} />
-          <Text style={[styles.modelText, { color: colors.text }]}>
-            <Text style={{ fontWeight: '700' }}>Llama 3.2 1B</Text> (Meta's flagship instruction model)
-          </Text>
-        </View>
+        <Text style={[styles.summaryTitle, { color: colors.text }]}>Verified On-Device Models:</Text>
+        {INITIAL_AI_MODELS.map((model) => (
+          <View key={model.id} style={styles.modelRow}>
+            <CheckCircle2 size={16} color={colors.primary} />
+            <Text style={[styles.modelText, { color: colors.text }]}>
+              <Text style={{ fontWeight: '700' }}>{model.name}</Text> ({model.quantization} · {model.parameters} · ~{model.fileSizeMB} MB)
+            </Text>
+          </View>
+        ))}
       </View>
 
       {/* Start Button */}

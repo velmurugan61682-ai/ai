@@ -740,6 +740,15 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
         </View>
       )}
 
+      {/* Web Demo Mode Honest Label */}
+      {Platform.OS === 'web' && (
+        <View style={[styles.webDemoBanner, { backgroundColor: '#FEF3C7', borderColor: '#F59E0B' }]}>
+          <Text style={styles.webDemoBannerText}>
+            ℹ️ <Text style={{ fontWeight: '700' }}>Demo mode – no real AI.</Text> On-device local inference (Qwen3 via llama.rn) runs natively on Android.
+          </Text>
+        </View>
+      )}
+
       {/* Conversational Quick Suggestion Pills */}
       <View style={[styles.suggestionsRow, { backgroundColor: colors.background }]}>
         <ScrollView
@@ -2476,5 +2485,19 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '700',
+  },
+  webDemoBanner: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  webDemoBannerText: {
+    fontSize: 12,
+    color: '#92400E',
+    lineHeight: 16,
   },
 });

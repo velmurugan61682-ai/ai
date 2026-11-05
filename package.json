@@ -9,7 +9,8 @@
     "web": "expo start --web",
     "build:web": "expo export -p web",
     "build": "expo export -p web",
-    "server": "node server/index.js",
+    "server": "npx tsx server/index.ts",
+    "test": "node scripts/run-tests.js",
     "expo:prebuild": "expo prebuild",
     "typecheck": "tsc --noEmit"
   },
@@ -33,7 +34,7 @@
     "expo-speech": "~13.0.0",
     "expo-status-bar": "~2.0.1",
     "express": "^4.21.2",
-    "llama.rn": "latest",
+    "llama.rn": "0.12.3",
     "lucide-react-native": "^0.475.0",
     "mongoose": "^8.9.5",
     "react": "18.3.1",

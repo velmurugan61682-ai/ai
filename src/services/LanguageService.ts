@@ -34,13 +34,29 @@ export class LanguageService {
   }
 
   /**
-   * Lightweight on-device language detection based on Unicode script analysis and vocabulary patterns.
+   * Checks if input contains both Tamil Unicode script and Latin English script.
+   */
+  public isMixedScript(input: string): boolean {
+    const text = input || '';
+    const hasTamil = /[\u0B80-\u0BFF]/.test(text);
+    const hasLatin = /[a-zA-Z]/.test(text);
+    return hasTamil && hasLatin;
+  }
+
+  /**
+   * On-device language detection based on Unicode script analysis, mixed-script detection,
+   * and an expanded Tanglish vocabulary for colloquial Tamil.
    */
   public detectLanguage(input: string): LanguageInfo {
-    const text = input.trim();
+    const text = (input || '').trim();
     if (!text) return SUPPORTED_LANGUAGES[0];
 
-    // Unicode Script Ranges
+    // 1. Mixed Script (Tamil + Latin) -> Categorized as Tanglish/Tamil colloquial
+    if (this.isMixedScript(text)) {
+      return SUPPORTED_LANGUAGES[2]; // Tanglish
+    }
+
+    // 2. Pure Unicode Script Ranges
     const tamilRegex = /[\u0B80-\u0BFF]/;
     const hindiRegex = /[\u0900-\u097F]/;
     const teluguRegex = /[\u0C00-\u0C7F]/;
@@ -59,25 +75,35 @@ export class LanguageService {
 
     const lower = text.toLowerCase();
 
-    // Tanglish heuristics (Latin script with Tamil vocabulary)
-    const tanglishWords = [
-      'sollu', 'solli', 'solreenga', 'pannu', 'panu', 'pannunga', 'kodu', 'kodunga',
-      'podu', 'rendu', 'moonu', 'naalu', 'anju', 'romba', 'enakku', 'unakku',
-      'enna', 'epdi', 'eppadi', 'irukku', 'irukken', 'vanakkam', 'nandri', 'pathi',
-      'theriyum', 'poda', 'vaanga', 'amma', 'appa', 'illa', 'illai', 'aama',
-      'seri', 'konjam', 'thani', 'saapadu', 'thambi', 'kaasu', 'evvalavu', 'oru'
+    // 3. Rich Tanglish vocabulary analysis across conversational and shop/billing operations
+    const tanglishVocabulary = [
+      // Actions & Verbs
+      'sollu', 'solli', 'solren', 'solreenga', 'pannu', 'panu', 'pannunga', 'kodu', 'kodunga', 'kudunga',
+      'podu', 'podunga', 'eduthudu', 'edunga', 'vaanga', 'ponga', 'kelambu', 'kudichiya', 'kudicha', 'paathu',
+      'paathukaren', 'pathukaren',
+      // Quantities & Numerals
+      'oru', 'onnu', 'rendu', 'erandu', 'moonu', 'moondru', 'naalu', 'anju', 'aaru', 'ezhu', 'ettu', 'ombodhu', 'pathu',
+      'innum', 'konjam', 'romba', 'kammi', 'neraya', 'kooda',
+      // Questions & Conjunctions
+      'enna', 'epdi', 'eppadi', 'edhu', 'edhukku', 'enga', 'engirukku', 'evlo', 'evvalavu', 'aachu', 'aagudhu', 'yaaru',
+      'innaiku', 'naalaikku', 'ippo', 'appo',
+      // Shop & Daily colloquial
+      'venum', 'vendaam', 'vendam', 'kaasu', 'panam', 'selavu', 'kadai', 'theva', 'seri', 'aama', 'illa', 'illai',
+      'thambi', 'anna', 'akka', 'nalla', 'onnum', 'unakku', 'ungalukku', 'enakku', 'engalukku', 'vanakkam', 'nandri'
     ];
+
     let tanglishMatches = 0;
-    for (const w of tanglishWords) {
-      if (new RegExp(`\\b${w}\\b`, 'i').test(lower)) {
+    for (const w of tanglishVocabulary) {
+      if (new RegExp(`(^|\\s)${w}(\\s|$)`, 'i').test(lower)) {
         tanglishMatches++;
       }
     }
+
     if (tanglishMatches >= 1) {
       return SUPPORTED_LANGUAGES[2]; // Tanglish
     }
 
-    // Hinglish heuristics (Latin script with Hindi vocabulary)
+    // 4. Hinglish heuristics
     const hinglishWords = [
       'kya', 'hai', 'hain', 'kaise', 'batao', 'bataiye', 'karo', 'karna',
       'namaste', 'dhanyavad', 'shukriya', 'mujhe', 'aapko', 'tumhe', 'accha',
@@ -85,7 +111,7 @@ export class LanguageService {
     ];
     let hinglishMatches = 0;
     for (const w of hinglishWords) {
-      if (new RegExp(`\\b${w}\\b`, 'i').test(lower)) {
+      if (new RegExp(`(^|\\s)${w}(\\s|$)`, 'i').test(lower)) {
         hinglishMatches++;
       }
     }
@@ -93,17 +119,13 @@ export class LanguageService {
       return SUPPORTED_LANGUAGES[4]; // Hinglish
     }
 
-    // French heuristics
+    // 5. European Language heuristics
     if (/\b(bonjour|merci|comment|pourquoi|oui|s'il vous plaît|salut)\b/i.test(lower)) {
       return SUPPORTED_LANGUAGES[9];
     }
-
-    // Spanish heuristics
     if (/\b(hola|gracias|buenos|por favor|amigo|como|adios)\b/i.test(lower)) {
       return SUPPORTED_LANGUAGES[10];
     }
-
-    // German heuristics
     if (/\b(guten|tag|danke|bitte|hallo|wie|tschuss)\b/i.test(lower)) {
       return SUPPORTED_LANGUAGES[11];
     }
@@ -113,25 +135,18 @@ export class LanguageService {
   }
 
   /**
-   * Sanitizes AI response text for text-to-speech reading:
-   * Removes markdown syntax, code snippets, system tags, and URLs.
+   * Sanitizes AI response text for text-to-speech reading.
    */
   public cleanTextForTTS(input: string): string {
-    return input
-      // Remove code blocks
+    return (input || '')
       .replace(/```[\s\S]*?```/g, '')
-      // Remove inline code
       .replace(/`([^`]+)`/g, '$1')
-      // Remove URLs
       .replace(/https?:\/\/\S+/g, '')
-      // Remove brackets and system notices like [Security Notice: ...]
+      .replace(/<think>[\s\S]*?<\/think>/gi, '')
       .replace(/\[.*?\]/g, '')
-      // Remove markdown headings, bold, bullet points
       .replace(/^[#*>\-\d.]+\s+/gm, '')
       .replace(/[*_~#]/g, '')
-      // Collapse whitespace
       .replace(/\s+/g, ' ')
       .trim();
   }
 }
-

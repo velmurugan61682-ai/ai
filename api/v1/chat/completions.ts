@@ -19,48 +19,91 @@ export default async function handler(req: any, res: any) {
   }
 
   if (!rawKey || !rawKey.startsWith('sab_')) {
-    return res.status(401).json({ error: 'Unauthorized', message: 'Valid API key required via Authorization: Bearer sab_...' });
+    return res.status(401).json({
+      error: 'Unauthorized',
+      message: 'Valid API key required via Authorization: Bearer sab_... header',
+    });
   }
 
-  let keyPrefix = 'sab_live_...';
+  // T7: Fail CLOSED on auth or database errors
   try {
     await connectToDatabase();
     const keyHash = hashApiKey(rawKey);
     const keyDoc = await ApiKey.findOne({ keyHash });
 
     if (!keyDoc || keyDoc.status !== 'active') {
-      return res.status(401).json({ error: 'Unauthorized', message: 'Invalid or revoked API key.' });
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Invalid or revoked API key.',
+      });
     }
 
-    keyPrefix = keyDoc.keyPrefix;
+    if (keyDoc.expiresAt && new Date(keyDoc.expiresAt) < new Date()) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'This API key has expired.',
+      });
+    }
+
     ApiKey.updateOne({ _id: keyDoc._id }, { $set: { lastUsedAt: new Date() } }).catch(() => {});
   } catch (err: any) {
-    console.warn('[Chat Completions API] DB check warning:', err.message);
+    console.error('[Chat Completions API] Auth check failed CLOSED:', err.message);
+    return res.status(503).json({
+      error: 'Service Unavailable',
+      message: 'Authentication service temporarily unavailable.',
+    });
   }
 
-  const { model = 'qwen3-0.6b', messages = [] } = req.body || {};
-  const lastPrompt = messages[messages.length - 1]?.content || 'Hello';
-  const responseText = `[SaaS AI Brain Cloud API] Processed query: "${lastPrompt}" via API Key ${keyPrefix}. Operating with edge safety and verified token authorization.`;
-
-  return res.status(200).json({
-    id: `chatcmpl-${Date.now()}`,
-    object: 'chat.completion',
-    created: Math.floor(Date.now() / 1000),
-    model,
-    choices: [
-      {
-        index: 0,
-        message: {
-          role: 'assistant',
-          content: responseText,
-        },
-        finish_reason: 'stop',
+  const { model = 'qwen3-0.6b', messages = [], temperature = 0.7 } = req.body || {};
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({
+      error: {
+        message: '`messages` array is required and must not be empty.',
+        type: 'invalid_request_error',
       },
-    ],
-    usage: {
-      prompt_tokens: Math.ceil(lastPrompt.length / 4),
-      completion_tokens: Math.ceil(responseText.length / 4),
-      total_tokens: Math.ceil((lastPrompt.length + responseText.length) / 4),
-    },
-  });
+    });
+  }
+
+  // Check for real upstream cloud LLM provider (OpenRouter or OpenAI)
+  const upstreamApiKey = process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY;
+  const upstreamUrl = process.env.OPENROUTER_API_KEY
+    ? 'https://openrouter.ai/api/v1/chat/completions'
+    : 'https://api.openai.com/v1/chat/completions';
+
+  if (!upstreamApiKey) {
+    // T7: Disable endpoint cleanly with 501 / "not configured" response instead of shipping a fake echo
+    return res.status(501).json({
+      error: {
+        message:
+          'Cloud LLM completion provider is not configured. Set OPENROUTER_API_KEY or OPENAI_API_KEY in the server environment to enable cloud fallback. On-device offline inference is available via the Android mobile application.',
+        type: 'not_implemented',
+      },
+    });
+  }
+
+  try {
+    const upstreamRes = await fetch(upstreamUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${upstreamApiKey}`,
+      },
+      body: JSON.stringify({
+        model: process.env.CLOUD_FALLBACK_MODEL || 'qwen/qwen-2.5-7b-instruct',
+        messages,
+        temperature,
+      }),
+    });
+
+    const data = await upstreamRes.json();
+    return res.status(upstreamRes.status).json(data);
+  } catch (err: any) {
+    console.error('[Chat Completions API] Upstream inference error:', err);
+    return res.status(502).json({
+      error: {
+        message: `Upstream cloud inference provider error: ${err.message}`,
+        type: 'bad_gateway',
+      },
+    });
+  }
 }

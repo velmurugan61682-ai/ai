@@ -20,20 +20,20 @@
   - **Lowest Memory Usage** (conservative low-RAM devices)
 
 ### 3. 📦 Verified GGUF Model Registry
-- **Qwen3 0.6B** (`Qwen2.5-0.5B-Instruct-Q4_K_M.gguf` ~398 MB) — Ultra-lightweight for 2GB+ devices.
-- **Llama 3.2 1B** (`Llama-3.2-1B-Instruct-Q4_K_M.gguf` ~808 MB) — High quality, efficient 1B parameter model.
-- **Qwen3 1.7B** (`Qwen2.5-1.5B-Instruct-Q4_K_M.gguf` ~986 MB) — Advanced reasoning for 6GB+ flagship phones.
-- All models are downloaded directly from verified HuggingFace repositories with explicit customer approval, progress tracking, pause/resume, and SHA-256 integrity verification.
+- **Qwen3 0.6B** (`Qwen3-0.6B-Q8_0.gguf` · 639,446,688 bytes · ~610 MB) — Ultra-lightweight default model for Android edge devices (2GB+ RAM).
+- **Qwen3 1.7B** (`Qwen3-1.7B-Q8_0.gguf` · 1,834,426,016 bytes · ~1.75 GB) — Advanced multilingual reasoning and complex intent for 4GB+ devices.
+- **Llama 3.2 1B** (`Llama-3.2-1B-Instruct-Q4_K_M.gguf` · 807,694,464 bytes · ~770 MB) — Meta's high-efficiency instruction-following edge model.
+- All models are downloaded directly from verified HuggingFace repositories with explicit user approval, progress tracking, pause/resume, and SHA-256 integrity verification.
 
 ### 4. 💬 Offline AI Chat & Billing Intent Engine
 - **Local Inference**: Zero telemetry or user prompt transmission. Works completely offline.
-- **Token Streaming & Telemetry**: Live TTFT (Time to First Token) and TPS (Tokens Per Second).
-- **Tamil / Tanglish Billing Parser**: High-accuracy natural language processing for retail and restaurant billing (e.g., *"Rendu Pepsi add pannu"*, *"Oru Coke add pannu"*, *"Moonu water bottle add pannu"*).
-- **Safety Validation Guards**: Financial transactions, price changes, and inventory modifications require strict human authorization and validation flags.
+- **Token Streaming & Telemetry**: Real-time TTFT (Time to First Token) and TPS (Tokens Per Second) calculated strictly from active inference clocks.
+- **Tamil / Tanglish Billing Parser**: Deterministic natural language processor for retail shop billing (e.g., *"Rendu Pepsi add pannu"*, *"3 biscuit add pannu"*, *"remove Pepsi"*, *"total evlo"*).
+- **Safety Validation Guards**: Financial transactions, price changes, and inventory modifications require strict merchant confirmation.
 
 ### 5. ⚡ Standardized Benchmark Testing Suite
 - Evaluates installed models using 5 standardized questions across English, Tamil, and Tanglish.
-- Measures TTFT, TPS, peak RAM, stability/crash rates, and multilingual comprehension.
+- Measures real TTFT, TPS, peak RAM, stability/crash rates, and multilingual comprehension.
 - Saves all benchmark telemetry to local storage for comparative analysis.
 
 ---
@@ -89,7 +89,10 @@ src/
 │   └── WelcomeScreen.tsx
 ├── services/
 │   ├── DeviceService.ts         # Android memory & battery services
-│   └── ModelDownloader.ts       # Resumable download manager
+│   ├── ModelDownloader.ts       # Resumable download manager
+│   ├── PhotoEditingService.ts   # Edge vector/canvas photo grading
+│   ├── VisionService.ts         # Vision status & honest capabilities
+│   └── VoiceService.ts          # Native & Web speech recognition
 ├── storage/
 │   └── ModelStorage.ts          # Local model & benchmark persistence
 └── theme/
@@ -98,26 +101,41 @@ src/
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Fresh Machine Setup & Build Instructions
 
 ### Prerequisites
-- Node.js (v18+)
-- OpenJDK 17 LTS
-- Android SDK (API 34/35)
+1. **Node.js**: v18 or v20 LTS
+2. **JDK 17**: OpenJDK 17 (set `JAVA_HOME` environment variable)
+   - Windows PowerShell:
+     ```powershell
+     [System.Environment]::SetEnvironmentVariable("JAVA_HOME", "C:\Program Files\Eclipse Adoptium\jdk-17.0.x-hotspot", "User")
+     $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.x-hotspot"
+     ```
+   - macOS / Linux:
+     ```bash
+     export JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home
+     ```
+3. **Android SDK**: Command-line tools, platform-tools, build-tools 35.0.0, platforms android-35, and NDK (26.1.10909125).
+   - Set `ANDROID_HOME` pointing to your Android SDK directory (e.g. `%LOCALAPPDATA%\Android\Sdk` on Windows).
 
-### Setup & Run
+### 1. Install Dependencies & Verify TypeScript
 ```bash
-# Install dependencies
 npm install
+npm run typecheck
+```
 
-# Run TypeScript check
-npx tsc --noEmit
+### 2. Export Web (Demo Mode)
+```bash
+npx expo export --platform web
+```
 
-# Start Expo development server
-npx expo start
-
-# Build Android Debug APK
+### 3. Build & Install Android Debug APK
+```bash
 cd android
 ./gradlew assembleDebug
+# If device/emulator is connected via ADB:
+adb install app/build/outputs/apk/debug/app-debug.apk
 ```
+*Note*: `android/gradle.properties` utilizes standard system `JAVA_HOME` and does not require hardcoded JDK paths. If `debug.keystore` is absent in `android/app`, the Android Gradle Plugin automatically defaults to your local `~/.android/debug.keystore` without build failure.
+
 

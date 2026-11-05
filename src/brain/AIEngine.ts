@@ -4,8 +4,17 @@ import { getModelById } from '../models/modelRegistry';
 import { LanguageService } from '../services/LanguageService';
 import { ModelStorage } from '../storage/ModelStorage';
 import { PhotoEditingService } from '../services/PhotoEditingService';
-import { VisionService, VisionAnalysisResult } from '../services/VisionService';
+import { VisionService } from '../services/VisionService';
 import { TiyoEmployeeService } from '../services/TiyoEmployeeService';
+import {
+  buildChatMLPrompt,
+  stripThinkingTags,
+  ThinkingStreamFilter,
+  DEFAULT_CONTEXT_WINDOW,
+  DEFAULT_MAX_OUTPUT_TOKENS,
+  QWEN_STOP_STRINGS,
+} from './PromptEngine';
+import { BillingParserService, ParsedBillingCommand } from '../services/BillingParserService';
 
 // Dynamically require llama.rn on native platforms while remaining safe in web/bundler contexts
 let llamaRnModule: any = null;
@@ -50,8 +59,8 @@ export class AIEngine {
   }
 
   /**
-   * Ensures that the requested model is downloaded and loaded into the native llama.rn context.
-   * Throws an informative error if the model file is not downloaded or native module is unavailable.
+   * Ensures that the requested model is downloaded and loaded into native llama.rn context.
+   * Throws a clear user-visible error if the model is not downloaded.
    */
   public async ensureModelLoaded(modelId: string = 'qwen3-0.6b'): Promise<boolean> {
     if (this.currentModelId === modelId && this.currentContext && !this.currentContext.stub) {
@@ -67,7 +76,6 @@ export class AIEngine {
     const modelFilePath = storage.getModelPath(modelMeta.fileName);
 
     console.log(`[AIEngine] Ensuring model "${modelMeta.name}" is loaded into memory.`);
-    console.log(`[AIEngine] Target GGUF path: ${modelFilePath}`);
 
     // Native Android platform
     if (Platform.OS === 'android') {
@@ -80,7 +88,7 @@ export class AIEngine {
       const isDownloaded = await storage.isModelFilePresent(modelMeta.fileName);
       if (!isDownloaded) {
         throw new Error(
-          `Model "${modelMeta.name}" (${modelMeta.fileSizeMB} MB) is not downloaded to device storage. Please download the model first from the Models tab.`
+          `Model "${modelMeta.name}" is not downloaded to device storage. Please download it first from the Models tab.`
         );
       }
 
@@ -88,9 +96,9 @@ export class AIEngine {
       return await this.loadModel(modelId, modelFilePath);
     }
 
-    // Web / non-Android platforms
+    // Web / non-Android platforms (Demo mode)
     if (Platform.OS === 'web') {
-      console.log('[AIEngine] Running in web platform mode.');
+      console.log('[AIEngine] Running in web platform mode (Demo mode).');
       if (!this.currentContext || this.currentModelId !== modelId) {
         this.currentContext = { stub: true, modelId, modelFilePath };
         this.currentModelId = modelId;
@@ -107,7 +115,7 @@ export class AIEngine {
 
   /**
    * Initializes and loads the GGUF model into native llama.cpp context.
-   * If another model was previously loaded, it releases its memory first.
+   * Sets n_ctx to 4096 as specified.
    */
   public async loadModel(modelId: string, modelFilePath: string): Promise<boolean> {
     try {
@@ -120,7 +128,7 @@ export class AIEngine {
       await this.unloadCurrentModel();
 
       const modelMeta = getModelById(modelId);
-      const contextSize = modelMeta?.contextWindow || 2048;
+      const contextSize = modelMeta?.contextWindow || DEFAULT_CONTEXT_WINDOW; // 4096
 
       if (llamaRnModule && typeof llamaRnModule.initLlama === 'function') {
         console.log(`[AIEngine] Calling llama.rn initLlama for ${modelId} (${modelMeta?.name || ''})...`);
@@ -132,10 +140,10 @@ export class AIEngine {
             model: modelFilePath,
             n_ctx: contextSize,
             n_gpu_layers: 99,
-            use_mlock: false, // Prevents Android kernel memory lock limit failures on unrooted devices
+            use_mlock: false,
           });
           console.log(
-            `[AIEngine] ✅ Native llama.rn context loaded! ID: ${this.currentContext?.id}, GPU: ${this.currentContext?.gpu}, ReasonNoGPU: ${this.currentContext?.reasonNoGPU || 'None'}`
+            `[AIEngine] ✅ Native llama.rn context loaded! ID: ${this.currentContext?.id}, GPU: ${this.currentContext?.gpu}`
           );
         } catch (gpuError: any) {
           console.warn(`[AIEngine] GPU init failed (${gpuError?.message}), falling back to CPU inference...`);
@@ -183,7 +191,10 @@ export class AIEngine {
 
   /**
    * Runs local inference on the loaded Qwen model offline with conversation history.
-   * Never returns fake placeholder templates.
+   * - Enforces /no_think in ChatML system prompt.
+   * - Strips any <think>...</think> blocks from stream and final text.
+   * - Token budgets history within 4096 context.
+   * - Deterministic billing commands work reliably; falls back to LLM.
    */
   public async generateCompletion(
     userPrompt: string,
@@ -201,7 +212,7 @@ export class AIEngine {
       throw new Error('Inference is currently active. Please wait for the current response to finish.');
     }
 
-    // Verify native context is loaded on Android
+    // Verify native context is loaded on Android - clear, user-visible error
     if (Platform.OS === 'android') {
       if (!this.currentContext || this.currentContext.stub || typeof this.currentContext.completion !== 'function') {
         throw new Error(
@@ -235,7 +246,7 @@ export class AIEngine {
         lowerPrompt.includes('filter') ||
         lowerPrompt.includes('style'));
 
-    // 1. AI Photo Editing Pipeline (if user uploads photo and requests edit)
+    // 1. AI Photo Editing Pipeline (genuine local canvas vector styling)
     if (isPhotoEditIntent) {
       try {
         const targetImg = imageAttachments[0];
@@ -248,7 +259,7 @@ export class AIEngine {
           },
         });
 
-        const totalTimeMs = Math.max(350, Date.now() - startTime);
+        const totalTimeMs = Math.max(1, Date.now() - startTime);
         const generatedText =
           `✨ **AI Photo Edit Complete!**\n\n` +
           `${editResult.summary}\n\n` +
@@ -256,13 +267,16 @@ export class AIEngine {
           `• **Transformation**: "${userPrompt}"\n` +
           `• **Download**: Tap the "Download Edited Photo" button below to save the file.`;
 
+        const approxTokens = Math.ceil(generatedText.length / 4);
+        const tps = parseFloat(((approxTokens / (totalTimeMs / 1000))).toFixed(1));
+
         return {
           text: generatedText,
           metrics: {
-            timeToFirstTokenMs: 90,
-            tokensPerSecond: 32.5,
+            timeToFirstTokenMs: totalTimeMs,
+            tokensPerSecond: tps,
             totalTimeMs,
-            totalTokens: 54,
+            totalTokens: approxTokens,
           },
           structuredData: null,
           editedPhoto: editResult.record,
@@ -272,7 +286,7 @@ export class AIEngine {
       }
     }
 
-    // 2. Multimodal Vision Context for Uploaded Images
+    // 2. Multimodal Vision Handling - Honest messaging without prompt injection
     let effectiveUserPrompt = userPrompt;
     if (imageAttachments.length > 0) {
       const targetImg = imageAttachments[0];
@@ -280,7 +294,7 @@ export class AIEngine {
       effectiveUserPrompt = VisionService.getInstance().buildVisionPrompt(userPrompt, visionAnalysis, targetImg);
     }
 
-    // 3. Document Extraction Context for Text, PDF, CSV, XLSX
+    // 3. Document Extraction Context
     if (documentAttachments.length > 0) {
       for (const doc of documentAttachments) {
         if (doc.extractedText) {
@@ -289,14 +303,124 @@ export class AIEngine {
       }
     }
 
-    const langInfo = LanguageService.getInstance().detectLanguage(userPrompt || effectiveUserPrompt);
+    // 4. Deterministic Billing Command Parser (T6)
+    // Common shop commands work reliably without depending on the LLM:
+    // "Rendu Pepsi add pannu" -> {action: 'add', item: 'Pepsi', qty: 2}
+    // "3 biscuit add pannu" -> {action: 'add', item: 'biscuit', qty: 3}
+    // "remove Pepsi" -> {action: 'remove', item: 'Pepsi'}
+    // "bill podu" / "total evlo" -> {action: 'total'}
+    const billingParser = BillingParserService.getInstance();
+    const parsedBilling = billingParser.parse(userPrompt || effectiveUserPrompt);
+
     const tiyo = TiyoEmployeeService.getInstance();
+
+    if (parsedBilling.matched) {
+      console.log(`[AIEngine] Deterministic billing command matched:`, parsedBilling);
+
+      let deterministicResponseText = '';
+      let structuredBilling: BillingStructure | null = null;
+
+      if (parsedBilling.action === 'add' && parsedBilling.item) {
+        const qty = parsedBilling.qty || 1;
+        const price = parsedBilling.unitPriceEstimate || 30;
+        tiyo.addToCart(parsedBilling.item, qty, price);
+        const currentTotal = tiyo.getCartTotal();
+
+        deterministicResponseText =
+          `Seri! ${qty}x ${parsedBilling.item} add panniten. Rate: ₹${price * qty}. ` +
+          `Ippo total ₹${currentTotal}. Vera edhavadhu add pannanuma?`;
+
+        structuredBilling = {
+          type: 'order_intent',
+          action: 'add_to_cart',
+          items: [
+            {
+              itemName: parsedBilling.item,
+              quantity: qty,
+              unit: 'unit',
+              unitPriceEstimate: price,
+              totalEstimate: price * qty,
+            },
+          ],
+          rawTamilInput: userPrompt,
+          requiresConfirmation: true,
+          validationStatus: 'PENDING_APPROVAL',
+          note: 'Deterministic billing parser match.',
+        };
+      } else if (parsedBilling.action === 'add' && !parsedBilling.item) {
+        // Follow-up quantity adjustment: e.g. "Innum rendu venum"
+        const lastItem = tiyo.getCart()[tiyo.getCart().length - 1];
+        if (lastItem) {
+          const addQty = parsedBilling.qty || 1;
+          tiyo.addToCart(lastItem.name, addQty, lastItem.unitPrice);
+          const currentTotal = tiyo.getCartTotal();
+          deterministicResponseText =
+            `Okay! Innum ${addQty}x ${lastItem.name} add panniten. Total ${lastItem.quantity + addQty} aagiduchu. ` +
+            `Ippo cart total ₹${currentTotal}.`;
+        } else {
+          deterministicResponseText = `Sollunga, enna product add pannanum?`;
+        }
+      } else if (parsedBilling.action === 'remove' && parsedBilling.item) {
+        tiyo.removeFromCart(parsedBilling.item);
+        const currentTotal = tiyo.getCartTotal();
+        deterministicResponseText =
+          `Seri! ${parsedBilling.item} cart-la irundhu remove panniten. Ippo total ₹${currentTotal}.`;
+      } else if (parsedBilling.action === 'total') {
+        const currentTotal = tiyo.getCartTotal();
+        const count = tiyo.getCartCount();
+        if (count === 0) {
+          deterministicResponseText = `Cart ippo empty-ah irukku. Enna product add pannanum?`;
+        } else {
+          deterministicResponseText = `Ippo total ₹${currentTotal} (${count} items). Cash ah, UPI ah?`;
+        }
+      } else if (parsedBilling.action === 'clear') {
+        await tiyo.clearCart();
+        deterministicResponseText = `Seri, bill clear panniten. Pudhu bill start pannalam!`;
+      } else if (parsedBilling.action === 'query_stock') {
+        const lowStock = tiyo.getLowStockItems();
+        deterministicResponseText =
+          `Inventory check panniten. Indha products stock kammiya irukku: ${lowStock.map((p: any) => `${p.name} (${p.stock} left)`).join(', ')}.`;
+      }
+
+      if (deterministicResponseText) {
+        // Stream out response
+        const words = deterministicResponseText.split(' ');
+        tokenCount = words.length;
+        firstTokenTime = Date.now();
+
+        for (let i = 0; i < words.length; i++) {
+          const word = (i === 0 ? '' : ' ') + words[i];
+          fullResponse += word;
+          if (onToken) onToken(word);
+          await new Promise((r) => setTimeout(r, 10));
+        }
+
+        const totalTimeMs = Math.max(1, Date.now() - startTime);
+        const ttft = firstTokenTime - startTime;
+        const tps = parseFloat(((tokenCount / (totalTimeMs / 1000))).toFixed(1));
+
+        this.isGenerating = false;
+        return {
+          text: fullResponse,
+          metrics: {
+            timeToFirstTokenMs: ttft,
+            tokensPerSecond: tps,
+            totalTimeMs,
+            totalTokens: tokenCount,
+          },
+          structuredData: structuredBilling,
+        };
+      }
+    }
+
+    // 5. Fallback to Local LLM (or Web Demo simulator)
+    const langInfo = LanguageService.getInstance().detectLanguage(userPrompt || effectiveUserPrompt);
     const tiyoConfig = tiyo.getConfig();
     const activeCart = tiyo.getCart();
     const sales = tiyo.getSalesSummary();
 
-    // Tiyo Human Employee System Prompt
-    const systemPrompt =
+    // Tiyo Human Employee System Prompt with /no_think
+    const baseSystemPrompt =
       customSystemPrompt ||
       `You are Tiyo, a real, friendly, smart human shop employee working inside the user's shop (Billzzy Lite POS).
 Personality: ${tiyoConfig.personality.toUpperCase()} SHOP EMPLOYEE.
@@ -309,88 +433,86 @@ Language Instructions:
 - Today's shop sales: ₹${sales.todayTotal} (${sales.billsCount} bills).
 - Help the owner with billing, inventory, checking sales, and friendly daily shop conversation.`;
 
-    // Check for Tamil / Tanglish Billing & Order intent
-    const structuredBilling = this.parseBillingOrInventoryIntent(userPrompt || '');
-
     try {
       if (
         this.currentContext &&
         !this.currentContext.stub &&
         typeof this.currentContext.completion === 'function'
       ) {
-        // Build exact Qwen ChatML prompt structure with multi-turn history
-        let formattedPrompt = `<|im_start|>system\n${systemPrompt}<|im_end|>\n`;
-        const recentHistory = (conversationHistory || []).slice(-8);
-        for (const msg of recentHistory) {
-          if (msg.role === 'user') {
-            formattedPrompt += `<|im_start|>user\n${msg.content}<|im_end|>\n`;
-          } else if (msg.role === 'assistant') {
-            // Strip any system prefixes or errors from prior turns
-            const cleanContent = msg.content.replace(/^⚠️.*?\n\n/s, '');
-            formattedPrompt += `<|im_start|>assistant\n${cleanContent}<|im_end|>\n`;
-          }
-        }
-        formattedPrompt += `<|im_start|>user\n${effectiveUserPrompt}<|im_end|>\n<|im_start|>assistant\n`;
+        // T3: Build ChatML Prompt correctly with token budgeting (4096 context) & /no_think
+        const { prompt: formattedPrompt } = buildChatMLPrompt(
+          baseSystemPrompt,
+          conversationHistory,
+          effectiveUserPrompt,
+          DEFAULT_MAX_OUTPUT_TOKENS,
+          DEFAULT_CONTEXT_WINDOW
+        );
 
         console.log(`[AIEngine] Submitting prompt to llama.rn native Qwen model (${this.currentModelId})...`);
-        console.log(`[AIEngine] Formatted ChatML Prompt:\n${formattedPrompt}`);
+
+        // T3: Streaming thinking stripper filter
+        const thinkFilter = new ThinkingStreamFilter((filteredToken) => {
+          if (tokenCount === 0) {
+            firstTokenTime = Date.now();
+          }
+          tokenCount++;
+          fullResponse += filteredToken;
+          if (onToken) onToken(filteredToken);
+        });
 
         const result = await this.currentContext.completion(
           {
             prompt: formattedPrompt,
-            n_predict: 512,
+            n_predict: DEFAULT_MAX_OUTPUT_TOKENS,
             temperature: 0.7,
             top_p: 0.9,
-            stop: ['<|im_end|>', '<|endoftext|>', '<|im_start|>', 'User:', 'user\n'],
+            // T3: Stop tokens replace ["<|im_end|>", "<|endoftext|>"]. Removed 'user\n'.
+            stop: QWEN_STOP_STRINGS,
           },
           (data: { token: string }) => {
             if (data?.token) {
-              if (tokenCount === 0) {
-                firstTokenTime = Date.now();
-              }
-              tokenCount++;
-              fullResponse += data.token;
-              if (onToken) onToken(data.token);
+              thinkFilter.processToken(data.token);
             }
           }
         );
 
-        fullResponse = result?.text || fullResponse;
-        // Clean any trailing stop tokens
-        fullResponse = fullResponse
+        thinkFilter.flush();
+
+        const rawResultText = result?.text || fullResponse;
+        // Strip any residual <think> tags from final text
+        fullResponse = stripThinkingTags(rawResultText)
           .replace(/<\|im_end\|>/g, '')
           .replace(/<\|endoftext\|>/g, '')
           .trim();
 
         const totalTimeMs = Math.max(1, Date.now() - startTime);
-        const ttft = firstTokenTime > 0 ? firstTokenTime - startTime : Math.min(80, totalTimeMs);
-        const tps = parseFloat(((tokenCount / totalTimeMs) * 1000).toFixed(1));
+        const ttft = firstTokenTime > 0 ? firstTokenTime - startTime : Math.min(60, totalTimeMs);
+        const tps = totalTimeMs > 0 ? parseFloat(((tokenCount / (totalTimeMs / 1000))).toFixed(1)) : 0;
 
         console.log(
           `[AIEngine] ✅ Inference complete! Generated ${tokenCount} tokens in ${totalTimeMs}ms (${tps} tps, TTFT: ${ttft}ms).`
         );
-        console.log(`[AIEngine] Generated Output:\n${fullResponse}`);
 
         return {
           text: fullResponse,
           metrics: {
             timeToFirstTokenMs: ttft,
-            tokensPerSecond: tps > 0 ? tps : 30.0,
+            tokensPerSecond: tps,
             totalTimeMs,
             totalTokens: tokenCount,
           },
-          structuredData: structuredBilling,
+          structuredData: null,
         };
       } else if (Platform.OS === 'web') {
-        // Tiyo Human Employee Edge Inference Pipeline on Web
-        console.log(`[AIEngine] Tiyo Employee handling request for ${this.currentModelId || 'Qwen3 0.6B'}`);
+        // Honest Web Demo Mode
+        console.log(`[AIEngine] Web Demo Mode handling request for ${this.currentModelId || 'Qwen3 0.6B'}`);
 
         const tiyoResponse = await tiyo.respondToOwner(effectiveUserPrompt);
-        const responseContent = tiyoResponse.displayText;
-        const activeBilling = tiyoResponse.structuredBilling || structuredBilling;
+        const rawContent = tiyoResponse.displayText;
+        const cleanContent = stripThinkingTags(rawContent);
 
-        // Simulate fast conversational token streaming
-        const words = responseContent.split(' ');
+        // Stream tokens realistically
+        const words = cleanContent.split(' ');
         tokenCount = words.length;
         firstTokenTime = Date.now();
 
@@ -401,152 +523,31 @@ Language Instructions:
           await new Promise((r) => setTimeout(r, 12));
         }
 
-        const totalTimeMs = Math.max(70, Date.now() - startTime);
-        const ttft = 35;
-        const tps = parseFloat(((tokenCount / totalTimeMs) * 1000).toFixed(1));
+        const totalTimeMs = Math.max(1, Date.now() - startTime);
+        const ttft = firstTokenTime - startTime;
+        const tps = parseFloat(((tokenCount / (totalTimeMs / 1000))).toFixed(1));
 
         return {
           text: fullResponse,
           metrics: {
             timeToFirstTokenMs: ttft,
-            tokensPerSecond: tps > 0 ? tps : 35.0,
+            tokensPerSecond: tps,
             totalTimeMs,
             totalTokens: tokenCount,
           },
-          structuredData: activeBilling,
+          structuredData: tiyoResponse.structuredBilling ?? null,
         };
       } else {
-        // Native llama.rn context is missing on Android
-        console.error('[AIEngine] Native llama.rn is not loaded in this session.');
+        // Native llama.rn context missing on Android
         throw new Error(
-          'On-device Qwen inference requires the model to be downloaded and active in native memory.'
+          'Qwen3 model is not loaded in device memory. Please download the model and tap to activate before chatting.'
         );
       }
     } catch (err: any) {
       console.error('[AIEngine] ❌ Inference execution error:', err);
-      throw new Error(`Inference engine error: ${err?.message || 'Model execution failed'}`);
+      throw new Error(err?.message || 'Inference engine failed');
     } finally {
       this.isGenerating = false;
     }
-  }
-
-  /**
-   * Deterministic billing and inventory intent parser for English, Tamil & Tanglish.
-   */
-  public parseBillingOrInventoryIntent(input: string): BillingStructure | null {
-    const text = input.trim().toLowerCase();
-
-    // Tamil number word mappings in Tanglish and Tamil script
-    const tamilNumbers: Record<string, number> = {
-      oru: 1,
-      onnu: 1,
-      one: 1,
-      rendu: 2,
-      erandu: 2,
-      two: 2,
-      moonu: 3,
-      moondru: 3,
-      three: 3,
-      naalu: 4,
-      nanku: 4,
-      four: 4,
-      anju: 5,
-      ainthu: 5,
-      five: 5,
-      aaru: 6,
-      six: 6,
-      ezhu: 7,
-      seven: 7,
-      ettu: 8,
-      eight: 8,
-      ombodhu: 9,
-      nine: 9,
-      pathu: 10,
-      ten: 10,
-    };
-
-    // Check for add/order patterns
-    const isAddCommand =
-      text.includes('add') ||
-      text.includes('pannu') ||
-      text.includes('kodu') ||
-      text.includes('podu') ||
-      text.includes('order') ||
-      text.includes('bill');
-
-    if (isAddCommand) {
-      let quantity = 1;
-
-      for (const [word, num] of Object.entries(tamilNumbers)) {
-        const regex = new RegExp(`\\b${word}\\b`, 'i');
-        if (regex.test(text)) {
-          quantity = num;
-          break;
-        }
-      }
-
-      // Check numeric digits (e.g. "2 Pepsi")
-      const digitMatch = text.match(/\b(\d+)\b/);
-      if (digitMatch) {
-        quantity = parseInt(digitMatch[1], 10);
-      }
-
-      // Extract item name
-      let itemName = text;
-      itemName = itemName
-        .replace(/\b(add|pannu|kodu|podu|order|bill|oru|onnu|rendu|moonu|naalu|anju|erandu|moondru)\b/gi, '')
-        .replace(/\b\d+\b/g, '')
-        .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-
-      if (!itemName || itemName.length < 2) {
-        itemName = 'Item';
-      }
-
-      const formattedItem = itemName
-        .split(' ')
-        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-        .join(' ');
-
-      const unitPrices: Record<string, number> = {
-        Pepsi: 40,
-        Coke: 40,
-        'Water Bottle': 20,
-      };
-
-      const unitPrice = unitPrices[formattedItem] || 35;
-
-      return {
-        type: 'order_intent',
-        action: 'add_to_cart',
-        items: [
-          {
-            itemName: formattedItem,
-            quantity,
-            unit: 'unit',
-            unitPriceEstimate: unitPrice,
-            totalEstimate: unitPrice * quantity,
-          },
-        ],
-        rawTamilInput: input,
-        requiresConfirmation: true,
-        validationStatus: 'PENDING_APPROVAL',
-        note: 'AI detected billing intent. Execution of inventory and cart changes requires customer validation.',
-      };
-    }
-
-    if (text.includes('inventory') && (text.includes('explain') || text.includes('management'))) {
-      return {
-        type: 'inventory_query',
-        action: 'view_inventory',
-        items: [],
-        requiresConfirmation: false,
-        validationStatus: 'VALIDATED_OFFLINE',
-        note: 'Educational overview of inventory tracking and stock turnover.',
-      };
-    }
-
-    return null;
   }
 }

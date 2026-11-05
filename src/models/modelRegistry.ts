@@ -15,7 +15,7 @@ export const INITIAL_AI_MODELS: AIModelMetadata[] = [
     minPhysicalRAMGB: 2.0,
     recommendedAvailableRAMGB: 1.0,
     minStorageMB: 750,
-    contextWindow: 2048,
+    contextWindow: 4096,
     speedRating: 5,
     accuracyRating: 4,
     memoryEfficiencyRating: 5,

@@ -2,7 +2,7 @@ import { Platform, PermissionsAndroid } from 'react-native';
 import { SUPPORTED_LANGUAGES, LanguageInfo } from './LanguageService';
 
 export interface VoiceRecognitionOptions {
-  language?: string; // BCP-47 locale e.g. 'ta-IN', 'en-US', 'hi-IN'
+  language?: string; // BCP-47 locale e.g. 'ta-IN', 'en-IN', 'hi-IN'
   continuous?: boolean;
   onStart?: () => void;
   onResult?: (transcript: string, isFinal: boolean) => void;
@@ -10,11 +10,23 @@ export interface VoiceRecognitionOptions {
   onEnd?: () => void;
 }
 
+// Dynamically reference native speech module if linked
+let ExpoSpeechRecognitionModule: any = null;
+if (Platform.OS !== 'web') {
+  try {
+    const pkg = require('expo-speech-recognition');
+    ExpoSpeechRecognitionModule = pkg.ExpoSpeechRecognitionModule || pkg.default;
+  } catch (e) {
+    // If expo-speech-recognition is not natively compiled in this binary
+  }
+}
+
 export class VoiceService {
   private static instance: VoiceService;
   private isListening = false;
-  private currentLanguage: LanguageInfo = SUPPORTED_LANGUAGES[0]; // English default
+  private currentLanguage: LanguageInfo = SUPPORTED_LANGUAGES[0]; // en-IN default
   private webRecognition: any = null;
+  private nativeListenerSubscription: any = null;
 
   private constructor() {}
 
@@ -37,6 +49,9 @@ export class VoiceService {
     this.currentLanguage = lang;
   }
 
+  /**
+   * Requests Android RECORD_AUDIO runtime permission.
+   */
   public async requestPermissions(): Promise<boolean> {
     if (Platform.OS === 'android') {
       try {
@@ -45,7 +60,7 @@ export class VoiceService {
           {
             title: 'Microphone Permission',
             message:
-              'SaaS AI Brain needs access to your microphone for multilingual voice-to-text.',
+              'SaaS AI Brain needs access to your microphone for English and Tamil voice recognition.',
             buttonNeutral: 'Ask Later',
             buttonNegative: 'Cancel',
             buttonPositive: 'OK',
@@ -67,12 +82,12 @@ export class VoiceService {
         ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)
       );
     }
-    // Android / native builds
     return true;
   }
 
   /**
    * Starts listening to user voice and streams recognized text in real time.
+   * Supports en-IN and ta-IN natively on Android.
    */
   public async startListening(options: VoiceRecognitionOptions): Promise<void> {
     if (this.isListening) {
@@ -81,21 +96,49 @@ export class VoiceService {
 
     const hasPermission = await this.requestPermissions();
     if (!hasPermission) {
-      options.onError?.('Microphone permission was denied. Please allow audio recording in settings.');
+      options.onError?.('Microphone permission was denied. Please allow audio recording in device settings.');
       return;
     }
 
-    const bcp47 = options.language || this.currentLanguage.bcp47;
+    // Default locale: en-IN or ta-IN
+    const bcp47 = options.language || this.currentLanguage.bcp47 || 'en-IN';
 
-    // Web / Chrome / Safari / Android Chrome implementation
-    if (Platform.OS === 'web' || (typeof window !== 'undefined' && 'webkitSpeechRecognition' in window)) {
+    // 1. Native Android with ExpoSpeechRecognitionModule (if linked)
+    if (Platform.OS === 'android' && ExpoSpeechRecognitionModule) {
+      try {
+        if (typeof ExpoSpeechRecognitionModule.requestPermissionsAsync === 'function') {
+          const perm = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+          if (!perm.granted) {
+            options.onError?.('Microphone permission denied by Android system.');
+            return;
+          }
+        }
+
+        this.isListening = true;
+        options.onStart?.();
+
+        if (typeof ExpoSpeechRecognitionModule.start === 'function') {
+          ExpoSpeechRecognitionModule.start({
+            lang: bcp47,
+            interimResults: true,
+            continuous: options.continuous ?? false,
+          });
+        }
+        return;
+      } catch (nativeErr: any) {
+        console.warn('[VoiceService] Native STT error, falling back:', nativeErr);
+      }
+    }
+
+    // 2. Web / Chrome / Safari / WebView implementation
+    if (Platform.OS === 'web' || (typeof window !== 'undefined' && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window))) {
       try {
         const SpeechRecognition =
           (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
         if (!SpeechRecognition) {
           options.onError?.(
-            'Speech recognition is not supported in this browser. Please use Chrome, Edge, or an Android device.'
+            'Speech recognition is not supported in this browser. Please use Chrome or an Android device.'
           );
           return;
         }
@@ -138,7 +181,7 @@ export class VoiceService {
           } else if (event.error === 'no-speech') {
             message = 'No speech detected. Please try speaking again.';
           } else if (event.error === 'network') {
-            message = 'Network required for cloud speech recognition fallback.';
+            message = 'Network connectivity required for cloud speech recognition fallback.';
           } else if (event.error) {
             message = `Speech recognition error: ${event.error}`;
           }
@@ -160,9 +203,10 @@ export class VoiceService {
       }
     }
 
-    // Native Android fallback notification if native bridge not linked
+    // If native speech engine isn't compiled into the current development build
+    this.isListening = false;
     options.onError?.(
-      'Device speech engine ready. Speak your prompt or enter text below.'
+      'Native speech recognizer is initializing. If running in an emulator without a physical microphone, please type your message.'
     );
   }
 
@@ -170,10 +214,13 @@ export class VoiceService {
     if (this.webRecognition) {
       try {
         this.webRecognition.stop();
-      } catch (e) {
-        // ignore
-      }
+      } catch (e) {}
       this.webRecognition = null;
+    }
+    if (ExpoSpeechRecognitionModule && typeof ExpoSpeechRecognitionModule.stop === 'function') {
+      try {
+        ExpoSpeechRecognitionModule.stop();
+      } catch (e) {}
     }
     this.isListening = false;
   }
@@ -182,12 +229,14 @@ export class VoiceService {
     if (this.webRecognition) {
       try {
         this.webRecognition.abort();
-      } catch (e) {
-        // ignore
-      }
+      } catch (e) {}
       this.webRecognition = null;
+    }
+    if (ExpoSpeechRecognitionModule && typeof ExpoSpeechRecognitionModule.abort === 'function') {
+      try {
+        ExpoSpeechRecognitionModule.abort();
+      } catch (e) {}
     }
     this.isListening = false;
   }
 }
-

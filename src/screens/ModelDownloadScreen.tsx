@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Platform } from 'react-native';
 import { Download, Pause, Play, Trash2, CheckCircle2, AlertCircle, HardDrive } from 'lucide-react-native';
 import { AIModelMetadata, ModelRuntimeState } from '../models/modelTypes';
 import { INITIAL_AI_MODELS } from '../models/modelRegistry';
@@ -32,6 +32,14 @@ export const ModelDownloadScreen: React.FC<ModelDownloadScreenProps> = ({
         subtitle="Manage local GGUF models on device storage"
         colors={colors}
       />
+
+      {Platform.OS === 'web' && (
+        <View style={styles.webNoticeBanner}>
+          <Text style={styles.webNoticeText}>
+            ℹ️ <Text style={{ fontWeight: '700' }}>Demo mode – no real AI.</Text> Real GGUF model storage and on-device execution requires the native Android application.
+          </Text>
+        </View>
+      )}
 
       <FlatList
         data={INITIAL_AI_MODELS}
@@ -323,6 +331,22 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  webNoticeBanner: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 4,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FEF3C7',
+    borderColor: '#F59E0B',
+  },
+  webNoticeText: {
+    fontSize: 12,
+    color: '#92400E',
+    lineHeight: 16,
   },
 });
 

@@ -49,33 +49,47 @@ apiV1Router.post(
       return;
     }
 
-    const lastMessage = messages[messages.length - 1]?.content || 'Hello';
+    const upstreamApiKey = process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY;
+    const upstreamUrl = process.env.OPENROUTER_API_KEY
+      ? 'https://openrouter.ai/api/v1/chat/completions'
+      : 'https://api.openai.com/v1/chat/completions';
 
-    // Generate response using SaaS AI Brain engine
-    const completionId = `chatcmpl-${Date.now()}`;
-    const generatedContent = `[SaaS AI Brain Edge API] Response to: "${lastMessage}". Processed locally via API Key authorization.`;
-
-    res.status(200).json({
-      id: completionId,
-      object: 'chat.completion',
-      created: Math.floor(Date.now() / 1000),
-      model,
-      choices: [
-        {
-          index: 0,
-          message: {
-            role: 'assistant',
-            content: generatedContent,
-          },
-          finish_reason: 'stop',
+    if (!upstreamApiKey) {
+      res.status(501).json({
+        error: {
+          message:
+            'Cloud LLM completion provider is not configured. Set OPENROUTER_API_KEY or OPENAI_API_KEY in server environment to enable cloud fallback. On-device local inference is available via the Android application.',
+          type: 'not_implemented',
         },
-      ],
-      usage: {
-        prompt_tokens: Math.ceil(lastMessage.length / 4),
-        completion_tokens: Math.ceil(generatedContent.length / 4),
-        total_tokens: Math.ceil((lastMessage.length + generatedContent.length) / 4),
+      });
+      return;
+    }
+
+    fetch(upstreamUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${upstreamApiKey}`,
       },
-    });
+      body: JSON.stringify({
+        model: process.env.CLOUD_FALLBACK_MODEL || 'qwen/qwen-2.5-7b-instruct',
+        messages,
+        temperature,
+      }),
+    })
+      .then(async (upRes) => {
+        const data = await upRes.json();
+        res.status(upRes.status).json(data);
+      })
+      .catch((err) => {
+        console.error('[API v1] Upstream inference error:', err);
+        res.status(502).json({
+          error: {
+            message: `Upstream cloud inference provider error: ${err.message}`,
+            type: 'bad_gateway',
+          },
+        });
+      });
   }
 );
 
