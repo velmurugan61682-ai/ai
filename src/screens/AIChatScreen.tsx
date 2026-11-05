@@ -40,6 +40,12 @@ import {
   FileText,
   FileSpreadsheet,
   Image as ImageIcon,
+  Sliders,
+  ShoppingBag,
+  RotateCcw,
+  Smile,
+  Briefcase,
+  UserCheck,
 } from 'lucide-react-native';
 import {
   AIModelMetadata,
@@ -58,6 +64,13 @@ import { TTSService } from '../services/TTSService';
 import { VoiceService } from '../services/VoiceService';
 import { AttachmentService } from '../services/AttachmentService';
 import { SpeakingRobot } from '../components/SpeakingRobot';
+import {
+  TiyoEmployeeService,
+  ShopCartItem,
+  EmployeePersonality,
+  TiyoLanguage,
+  TiyoConfig,
+} from '../services/TiyoEmployeeService';
 
 interface AIChatScreenProps {
   selectedModel: AIModelMetadata | null;
@@ -92,6 +105,13 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
   // PWA Install Prompt State
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [canInstallPwa, setCanInstallPwa] = useState(false);
+
+  // Tiyo Employee & Cart State
+  const tiyoService = TiyoEmployeeService.getInstance();
+  const [tiyoConfig, setTiyoConfig] = useState<TiyoConfig>(tiyoService.getConfig());
+  const [cartItems, setCartItems] = useState<ShopCartItem[]>(tiyoService.getCart());
+  const [showTiyoModal, setShowTiyoModal] = useState(false);
+  const [showCartModal, setShowCartModal] = useState(false);
 
   // File & Image Attachment State
   const [stagedAttachments, setStagedAttachments] = useState<ChatAttachment[]>([]);
@@ -421,9 +441,12 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
       setMessages((prev) => [...prev, assistantMessage]);
       await storage.saveChatMessage(assistantMessage);
 
-      // In continuous voice mode, speak response and loop
-      if (continuousModeRef.current) {
-        handlePlayTTS(assistantMessage, true);
+      // Sync active cart
+      setCartItems(tiyoService.getCart());
+
+      // In continuous voice mode or when Tiyo voice is enabled, speak response
+      if (continuousModeRef.current || tiyoConfig.voiceEnabled) {
+        handlePlayTTS(assistantMessage, continuousModeRef.current);
       }
     } catch (err: any) {
       console.error('[AIChat] Inference error:', err);
@@ -526,11 +549,26 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
   };
 
   const handleClearChat = async () => {
-    await handleStopAllTTS();
-    await voiceService.stopListening();
-    setIsListening(false);
-    await storage.clearChatHistory();
-    setMessages([]);
+    Alert.alert(
+      'Reset Tiyo & Cart',
+      'Do you want to reset current conversation and the active billing cart?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset',
+          style: 'destructive',
+          onPress: async () => {
+            await handleStopAllTTS();
+            await voiceService.stopListening();
+            setIsListening(false);
+            await storage.clearChatHistory();
+            await tiyoService.clearCart();
+            setCartItems([]);
+            setMessages([]);
+          },
+        },
+      ]
+    );
   };
 
   // Latest assistant message for speaking robot tap
@@ -542,17 +580,35 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <Header
-        title="SaaS AI Brain"
+        title="Tiyo · Shop Employee"
         subtitle={
-          modelStatus === 'ready'
-            ? `🟢 ${activeModel.name} Active (Ready)`
-            : modelStatus === 'loading'
-            ? `🟡 Loading ${activeModel.name}...`
-            : `⚠️ ${activeModel.name} (Not Downloaded)`
+          `🤝 ${tiyoConfig.personality.charAt(0).toUpperCase() + tiyoConfig.personality.slice(1)} Employee · Billzzy Lite POS`
         }
         colors={colors}
         rightAction={
           <View style={styles.headerRightActions}>
+            {/* Active Cart Quick Pill */}
+            {cartItems.length > 0 && (
+              <TouchableOpacity
+                onPress={() => setShowCartModal(true)}
+                style={[styles.cartHeaderPill, { backgroundColor: colors.successLight, borderColor: colors.success }]}
+              >
+                <ShoppingCart size={13} color={colors.success} />
+                <Text style={[styles.cartHeaderPillText, { color: colors.success }]}>
+                  ₹{tiyoService.getCartTotal()}
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            {/* Tiyo Personality Settings Button */}
+            <TouchableOpacity
+              onPress={() => setShowTiyoModal(true)}
+              style={[styles.tiyoSettingsPill, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}
+              accessibilityLabel="Tiyo Settings"
+            >
+              <Sliders size={13} color={colors.primary} />
+            </TouchableOpacity>
+
             {/* PWA Install Button */}
             {canInstallPwa && (
               <TouchableOpacity
@@ -560,7 +616,7 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
                 style={[styles.pwaInstallBtn, { backgroundColor: colors.primary }]}
               >
                 <Download size={13} color="#FFFFFF" />
-                <Text style={styles.pwaInstallText}>Install App</Text>
+                <Text style={styles.pwaInstallText}>Install</Text>
               </TouchableOpacity>
             )}
 
@@ -585,13 +641,6 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
               </Text>
             </TouchableOpacity>
 
-            <TouchableOpacity onPress={onOpenModelSelector} style={styles.modelSwitchPill}>
-              <Cpu size={13} color={colors.primary} />
-              <Text style={[styles.modelSwitchText, { color: colors.primary }]}>
-                {activeModel.parameters}
-              </Text>
-            </TouchableOpacity>
-
             <TouchableOpacity onPress={handleClearChat} style={styles.clearBtn}>
               <Trash2 size={16} color={colors.textMuted} />
             </TouchableOpacity>
@@ -599,12 +648,12 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
         }
       />
 
-      {/* Robot Assistant Status & Language Header Strip */}
+      {/* Tiyo Assistant Status & Language Header Strip */}
       <View style={[styles.assistantTopBar, { backgroundColor: colors.card, borderBottomColor: colors.divider }]}>
         <SpeakingRobot
           status={speakingMessageId ? 'speaking' : isListening ? 'listening' : 'idle'}
           colors={colors}
-          size={50}
+          size={48}
           onPress={() => {
             if (speakingMessageId) {
               handleStopAllTTS();
@@ -617,33 +666,27 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
         <View style={styles.assistantMetaBox}>
           <Text style={[styles.robotGreetingText, { color: colors.text }]}>
             {speakingMessageId
-              ? 'Speaking response aloud...'
+              ? 'Tiyo is speaking...'
               : isListening
-              ? `Listening in ${selectedLanguage.name}...`
-              : modelStatus === 'ready'
-              ? `${activeModel.name} Loaded & Ready (Offline)`
-              : modelStatus === 'loading'
-              ? `Loading ${activeModel.name} into RAM...`
-              : `${activeModel.name} Not Downloaded`}
+              ? `Listening to you...`
+              : 'Tiyo is ready to assist'}
           </Text>
           <Text style={[styles.robotSubText, { color: colors.textMuted }]}>
             {speakingMessageId
-              ? 'Tap robot to pause speech'
-              : modelStatus === 'ready'
-              ? '100% On-Device AI • English, Tamil & Tanglish'
-              : 'Download model from Models tab for offline inference'}
+              ? 'Tap avatar to pause speech'
+              : `Natural Employee Chat • Tanglish, Tamil & English`}
           </Text>
         </View>
 
-        {/* Language & Speed Selector Chips */}
+        {/* Personality & Language Pills */}
         <View style={styles.topBarControls}>
           <TouchableOpacity
-            style={[styles.smallPill, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}
-            onPress={() => setShowLanguageModal(true)}
+            style={[styles.smallPill, { backgroundColor: colors.primarySubtle, borderColor: colors.primary }]}
+            onPress={() => setShowTiyoModal(true)}
           >
-            <Languages size={12} color={colors.primary} />
-            <Text style={[styles.smallPillText, { color: colors.text }]}>
-              {selectedLanguage.code}
+            <UserCheck size={12} color={colors.primary} />
+            <Text style={[styles.smallPillText, { color: colors.primary }]}>
+              {tiyoConfig.personality}
             </Text>
           </TouchableOpacity>
 
@@ -651,7 +694,9 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
             style={[styles.smallPill, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}
             onPress={() => {
               const nextIdx = (SPEECH_SPEEDS.indexOf(speechSpeed) + 1) % SPEECH_SPEEDS.length;
-              setSpeechSpeed(SPEECH_SPEEDS[nextIdx]);
+              const nextSpeed = SPEECH_SPEEDS[nextIdx];
+              setSpeechSpeed(nextSpeed);
+              tiyoService.saveConfig({ speechSpeed: nextSpeed });
             }}
           >
             <Text style={[styles.smallPillText, { color: colors.text }]}>
@@ -659,6 +704,72 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
             </Text>
           </TouchableOpacity>
         </View>
+      </View>
+
+      {/* Active Cart Quick Strip (if cart has items) */}
+      {cartItems.length > 0 && (
+        <View style={[styles.activeCartStrip, { backgroundColor: colors.card, borderBottomColor: colors.divider }]}>
+          <TouchableOpacity
+            style={styles.cartStripLeft}
+            onPress={() => setShowCartModal(true)}
+          >
+            <View style={[styles.cartStripIconBox, { backgroundColor: colors.primarySubtle }]}>
+              <ShoppingCart size={15} color={colors.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={[styles.cartStripTitle, { color: colors.text }]}>
+                  Active Cart ({tiyoService.getCartCount()} items)
+                </Text>
+                <Text style={[styles.cartStripTotal, { color: colors.primary }]}>
+                  ₹{tiyoService.getCartTotal()}
+                </Text>
+              </View>
+              <Text style={[styles.cartStripSubtitle, { color: colors.textMuted }]} numberOfLines={1}>
+                {cartItems.map((i) => `${i.quantity}x ${i.name}`).join(' • ')}
+              </Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.cartActionBtn, { backgroundColor: colors.primary }]}
+            onPress={() => handleSendPrompt('Total evlo?')}
+          >
+            <Text style={styles.cartActionBtnText}>Total?</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Conversational Quick Suggestion Pills */}
+      <View style={[styles.suggestionsRow, { backgroundColor: colors.background }]}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.suggestionsScroll}
+        >
+          {[
+            'Tiyo, enna panra?',
+            'Billing start pannu',
+            'Oru vanilla cake add pannu',
+            'Innum rendu venum',
+            'Egg puffs-um add pannu',
+            'Total evlo?',
+            'Innaiku sales epdi irukku?',
+            'Stock kammiya irukkura products edhu?',
+            'Tiyo, tea kudichiya?',
+            'Nalla joke sollu',
+          ].map((pill, idx) => (
+            <TouchableOpacity
+              key={idx}
+              style={[styles.suggestionChip, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+              onPress={() => handleSendPrompt(pill)}
+            >
+              <Text style={[styles.suggestionChipText, { color: colors.text }]}>
+                💬 {pill}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
       </View>
 
       {/* Chat Messages List */}
@@ -1108,7 +1219,7 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
           placeholder={
             stagedAttachments.length > 0
               ? 'Add an instruction (e.g. "Change bg to blue", "Summarize") or send...'
-              : 'Ask Qwen in Tamil, English, or Tanglish...'
+              : 'Talk to Tiyo in Tanglish, Tamil, or English (e.g. "Oru cake add pannu")...'
           }
           placeholderTextColor={colors.textSubtle}
           value={inputText}
@@ -1294,6 +1405,215 @@ export const AIChatScreen: React.FC<AIChatScreenProps> = ({
                 );
               })}
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Tiyo Employee Personality Settings Modal */}
+      <Modal visible={showTiyoModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.tiyoModalCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+            <View style={styles.tiyoModalHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <UserCheck size={20} color={colors.primary} />
+                <Text style={[styles.tiyoModalTitle, { color: colors.text }]}>Tiyo Personality</Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowTiyoModal(false)}>
+                <X size={20} color={colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {/* Personality Mode */}
+              <Text style={[styles.tiyoSectionTitle, { color: colors.textSubtle }]}>Employee Tone</Text>
+              <View style={styles.personalityGrid}>
+                {[
+                  { id: 'friendly', name: 'Friendly', desc: 'Warm & helpful shop employee' },
+                  { id: 'professional', name: 'Professional', desc: 'Polite & formal associate' },
+                  { id: 'casual', name: 'Casual', desc: 'Relaxed & easygoing shop buddy' },
+                ].map((item) => {
+                  const isSel = tiyoConfig.personality === item.id;
+                  return (
+                    <TouchableOpacity
+                      key={item.id}
+                      style={[
+                        styles.personalityCard,
+                        {
+                          backgroundColor: isSel ? colors.primarySubtle : colors.surface,
+                          borderColor: isSel ? colors.primary : colors.cardBorder,
+                        },
+                      ]}
+                      onPress={() => {
+                        const next = { ...tiyoConfig, personality: item.id as EmployeePersonality };
+                        setTiyoConfig(next);
+                        tiyoService.saveConfig(next);
+                      }}
+                    >
+                      <Smile size={16} color={isSel ? colors.primary : colors.textMuted} />
+                      <Text style={[styles.personalityName, { color: isSel ? colors.primary : colors.text }]}>
+                        {item.name}
+                      </Text>
+                      <Text style={[styles.personalityTag, { color: colors.textMuted }]}>
+                        {item.desc}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {/* Language Preference */}
+              <Text style={[styles.tiyoSectionTitle, { color: colors.textSubtle, marginTop: 14 }]}>
+                Conversation Language
+              </Text>
+              <View style={styles.languageRow}>
+                {[
+                  { id: 'tanglish', label: 'Tanglish' },
+                  { id: 'tamil', label: 'தமிழ் (Tamil)' },
+                  { id: 'english', label: 'English' },
+                  { id: 'hindi', label: 'हिन्दी (Hindi)' },
+                  { id: 'auto', label: 'Auto Detect' },
+                ].map((lang) => {
+                  const isSel = tiyoConfig.language === lang.id;
+                  return (
+                    <TouchableOpacity
+                      key={lang.id}
+                      style={[
+                        styles.languageChip,
+                        {
+                          backgroundColor: isSel ? colors.primary : colors.surface,
+                          borderColor: isSel ? colors.primary : colors.cardBorder,
+                        },
+                      ]}
+                      onPress={() => {
+                        const next = { ...tiyoConfig, language: lang.id as TiyoLanguage };
+                        setTiyoConfig(next);
+                        tiyoService.saveConfig(next);
+                      }}
+                    >
+                      <Text style={[styles.languageChipText, { color: isSel ? '#FFFFFF' : colors.text }]}>
+                        {lang.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {/* Voice Speech Toggle */}
+              <View style={[styles.settingToggleRow, { marginTop: 14 }]}>
+                <View>
+                  <Text style={[styles.settingTitle, { color: colors.text }]}>Employee Voice Output</Text>
+                  <Text style={[styles.settingDesc, { color: colors.textMuted }]}>
+                    Tiyo speaks responses out loud
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => {
+                    const next = { ...tiyoConfig, voiceEnabled: !tiyoConfig.voiceEnabled };
+                    setTiyoConfig(next);
+                    tiyoService.saveConfig(next);
+                  }}
+                  style={[
+                    styles.voiceToggleBadge,
+                    { backgroundColor: tiyoConfig.voiceEnabled ? colors.primary : colors.surface },
+                  ]}
+                >
+                  <Text style={{ color: tiyoConfig.voiceEnabled ? '#FFFFFF' : colors.textMuted, fontSize: 11, fontWeight: '700' }}>
+                    {tiyoConfig.voiceEnabled ? 'Enabled' : 'Muted'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Speech Speed */}
+              <Text style={[styles.tiyoSectionTitle, { color: colors.textSubtle, marginTop: 14 }]}>
+                Voice Speed
+              </Text>
+              <View style={styles.speedBtnRow}>
+                {SPEECH_SPEEDS.map((s) => {
+                  const isSel = speechSpeed === s;
+                  return (
+                    <TouchableOpacity
+                      key={s}
+                      style={[
+                        styles.speedBtn,
+                        {
+                          backgroundColor: isSel ? colors.primary : colors.surface,
+                          borderColor: isSel ? colors.primary : colors.cardBorder,
+                        },
+                      ]}
+                      onPress={() => {
+                        setSpeechSpeed(s);
+                        tiyoService.saveConfig({ speechSpeed: s });
+                      }}
+                    >
+                      <Text style={[styles.speedBtnText, { color: isSel ? '#FFFFFF' : colors.text }]}>
+                        {s}x
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Active Cart Details Modal */}
+      <Modal visible={showCartModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.cartModalCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+            <View style={styles.tiyoModalHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <ShoppingCart size={20} color={colors.primary} />
+                <Text style={[styles.tiyoModalTitle, { color: colors.text }]}>
+                  Active Bill Cart ({tiyoService.getCartCount()} items)
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowCartModal(false)}>
+                <X size={20} color={colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ maxHeight: 250 }}>
+              {cartItems.map((item) => (
+                <View key={item.id} style={[styles.cartModalItemRow, { borderBottomColor: colors.divider }]}>
+                  <View>
+                    <Text style={[styles.cartItemName, { color: colors.text }]}>{item.name}</Text>
+                    <Text style={[styles.cartItemSub, { color: colors.textMuted }]}>
+                      {item.quantity} {item.unit}s @ ₹{item.unitPrice}
+                    </Text>
+                  </View>
+                  <Text style={[styles.cartItemTotal, { color: colors.primary }]}>₹{item.totalPrice}</Text>
+                </View>
+              ))}
+            </ScrollView>
+
+            <View style={styles.cartTotalSummaryRow}>
+              <Text style={[styles.cartTotalLabel, { color: colors.text }]}>Total Bill Amount:</Text>
+              <Text style={[styles.cartTotalValue, { color: colors.primary }]}>₹{tiyoService.getCartTotal()}</Text>
+            </View>
+
+            <View style={styles.cartModalBtnRow}>
+              <TouchableOpacity
+                style={[styles.cartClearBtn, { borderColor: colors.error }]}
+                onPress={async () => {
+                  await tiyoService.clearCart();
+                  setCartItems([]);
+                  setShowCartModal(false);
+                }}
+              >
+                <Text style={{ color: colors.error, fontSize: 12, fontWeight: '700' }}>Clear Cart</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.cartAskTotalBtn, { backgroundColor: colors.primary }]}
+                onPress={() => {
+                  setShowCartModal(false);
+                  handleSendPrompt('Total evlo?');
+                }}
+              >
+                <Text style={styles.cartAskTotalText}>Ask "Total evlo?"</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -1913,5 +2233,248 @@ const styles = StyleSheet.create({
   sheetOptionDesc: {
     fontSize: 11,
     marginTop: 2,
+  },
+  cartHeaderPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  cartHeaderPillText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  tiyoSettingsPill: {
+    padding: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  activeCartStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    gap: 8,
+  },
+  cartStripLeft: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  cartStripIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cartStripTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  cartStripTotal: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  cartStripSubtitle: {
+    fontSize: 10,
+    marginTop: 1,
+  },
+  cartActionBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  cartActionBtnText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  suggestionsRow: {
+    paddingVertical: 6,
+  },
+  suggestionsScroll: {
+    paddingHorizontal: 12,
+    gap: 8,
+  },
+  suggestionChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  suggestionChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  tiyoModalCard: {
+    width: '90%',
+    maxWidth: 420,
+    borderRadius: 20,
+    padding: 20,
+    borderWidth: 1,
+    gap: 14,
+    maxHeight: '85%',
+  },
+  tiyoModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  tiyoModalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  tiyoSectionTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  personalityGrid: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  personalityCard: {
+    flex: 1,
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+    gap: 4,
+  },
+  personalityName: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  personalityTag: {
+    fontSize: 9,
+    textAlign: 'center',
+  },
+  languageRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  languageChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  languageChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  settingToggleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  settingTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  settingDesc: {
+    fontSize: 11,
+    marginTop: 2,
+  },
+  voiceToggleBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+  },
+  speedBtnRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  speedBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  speedBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  cartModalCard: {
+    width: '90%',
+    maxWidth: 420,
+    borderRadius: 20,
+    padding: 20,
+    borderWidth: 1,
+    gap: 14,
+    maxHeight: '80%',
+  },
+  cartModalItemRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+  },
+  cartItemName: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  cartItemSub: {
+    fontSize: 11,
+    marginTop: 2,
+  },
+  cartItemTotal: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  cartTotalSummaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: 8,
+  },
+  cartTotalLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  cartTotalValue: {
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  cartModalBtnRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 6,
+  },
+  cartClearBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cartAskTotalBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cartAskTotalText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
   },
 });

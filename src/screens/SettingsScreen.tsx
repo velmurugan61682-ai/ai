@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert } from 'react-native';
-import { Moon, RefreshCw, Trash2, ShieldCheck, Database, FileText, Info, Key, BookOpen } from 'lucide-react-native';
+import { Moon, RefreshCw, Trash2, ShieldCheck, Database, FileText, Info, Key, BookOpen, UserCheck, Volume2 } from 'lucide-react-native';
 import { Header } from '../components/Header';
 import { ThemeColors } from '../theme/theme';
 import { ModelStorage } from '../storage/ModelStorage';
+import { TiyoEmployeeService, EmployeePersonality, TiyoLanguage } from '../services/TiyoEmployeeService';
 
 interface SettingsScreenProps {
   darkMode: boolean;
@@ -24,13 +25,23 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   onNavigateToApiKeys,
   onNavigateToApiDocs,
 }) => {
+  const tiyoService = TiyoEmployeeService.getInstance();
+  const [tiyoConfig, setTiyoConfig] = useState(tiyoService.getConfig());
+
   const confirmClearAll = () => {
     Alert.alert(
       'Clear All Local Data',
-      'This will delete all saved benchmark scores and chat logs. Downloaded model files will remain intact.',
+      'This will delete all saved benchmark scores, chat logs, and active cart. Downloaded model files will remain intact.',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Clear Data', style: 'destructive', onPress: onClearAllData },
+        {
+          text: 'Clear Data',
+          style: 'destructive',
+          onPress: async () => {
+            await tiyoService.clearCart();
+            onClearAllData();
+          },
+        },
       ]
     );
   };
@@ -63,6 +74,105 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
             <Switch
               value={darkMode}
               onValueChange={onToggleDarkMode}
+              trackColor={{ false: colors.cardBorder, true: colors.primary }}
+              thumbColor="#FFFFFF"
+            />
+          </View>
+        </View>
+
+        {/* Tiyo Employee Personality */}
+        <View style={[styles.sectionCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+            <UserCheck size={18} color={colors.primary} />
+            <Text style={[styles.sectionHeading, { color: colors.text, marginBottom: 0 }]}>
+              Tiyo · Shop Employee Personality
+            </Text>
+          </View>
+
+          <Text style={[styles.subHeading, { color: colors.textSubtle }]}>Employee Tone</Text>
+          <View style={styles.pillGrid}>
+            {[
+              { id: 'friendly', label: 'Friendly (Default)' },
+              { id: 'professional', label: 'Professional' },
+              { id: 'casual', label: 'Casual Buddy' },
+            ].map((p) => {
+              const isSel = tiyoConfig.personality === p.id;
+              return (
+                <TouchableOpacity
+                  key={p.id}
+                  style={[
+                    styles.pillOption,
+                    {
+                      backgroundColor: isSel ? colors.primary : colors.surface,
+                      borderColor: isSel ? colors.primary : colors.cardBorder,
+                    },
+                  ]}
+                  onPress={() => {
+                    const next = { ...tiyoConfig, personality: p.id as EmployeePersonality };
+                    setTiyoConfig(next);
+                    tiyoService.saveConfig(next);
+                  }}
+                >
+                  <Text style={[styles.pillOptionText, { color: isSel ? '#FFFFFF' : colors.text }]}>
+                    {p.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <Text style={[styles.subHeading, { color: colors.textSubtle, marginTop: 12 }]}>Language</Text>
+          <View style={styles.pillGrid}>
+            {[
+              { id: 'tanglish', label: 'Tanglish' },
+              { id: 'tamil', label: 'Tamil' },
+              { id: 'english', label: 'English' },
+              { id: 'auto', label: 'Auto' },
+            ].map((lang) => {
+              const isSel = tiyoConfig.language === lang.id;
+              return (
+                <TouchableOpacity
+                  key={lang.id}
+                  style={[
+                    styles.pillOption,
+                    {
+                      backgroundColor: isSel ? colors.primary : colors.surface,
+                      borderColor: isSel ? colors.primary : colors.cardBorder,
+                    },
+                  ]}
+                  onPress={() => {
+                    const next = { ...tiyoConfig, language: lang.id as TiyoLanguage };
+                    setTiyoConfig(next);
+                    tiyoService.saveConfig(next);
+                  }}
+                >
+                  <Text style={[styles.pillOptionText, { color: isSel ? '#FFFFFF' : colors.text }]}>
+                    {lang.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <View style={[styles.divider, { backgroundColor: colors.divider, marginVertical: 12 }]} />
+
+          <View style={styles.settingRow}>
+            <View style={styles.settingLeft}>
+              <Volume2 size={18} color={colors.primary} />
+              <View>
+                <Text style={[styles.settingTitle, { color: colors.text }]}>Voice Speech Output</Text>
+                <Text style={[styles.settingDesc, { color: colors.textMuted }]}>
+                  Tiyo speaks responses aloud
+                </Text>
+              </View>
+            </View>
+            <Switch
+              value={tiyoConfig.voiceEnabled}
+              onValueChange={(val) => {
+                const next = { ...tiyoConfig, voiceEnabled: val };
+                setTiyoConfig(next);
+                tiyoService.saveConfig(next);
+              }}
               trackColor={{ false: colors.cardBorder, true: colors.primary }}
               thumbColor="#FFFFFF"
             />
@@ -237,6 +347,28 @@ const styles = StyleSheet.create({
   licenseItem: {
     fontSize: 12,
     lineHeight: 17,
+  },
+  subHeading: {
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  pillGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  pillOption: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  pillOptionText: {
+    fontSize: 12,
+    fontWeight: '600',
   },
 });
 

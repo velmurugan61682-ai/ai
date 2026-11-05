@@ -5,6 +5,7 @@ import { LanguageService } from '../services/LanguageService';
 import { ModelStorage } from '../storage/ModelStorage';
 import { PhotoEditingService } from '../services/PhotoEditingService';
 import { VisionService, VisionAnalysisResult } from '../services/VisionService';
+import { TiyoEmployeeService } from '../services/TiyoEmployeeService';
 
 // Dynamically require llama.rn on native platforms while remaining safe in web/bundler contexts
 let llamaRnModule: any = null;
@@ -289,17 +290,24 @@ export class AIEngine {
     }
 
     const langInfo = LanguageService.getInstance().detectLanguage(userPrompt || effectiveUserPrompt);
-    
-    // Qwen3 Chat System Prompt
+    const tiyo = TiyoEmployeeService.getInstance();
+    const tiyoConfig = tiyo.getConfig();
+    const activeCart = tiyo.getCart();
+    const sales = tiyo.getSalesSummary();
+
+    // Tiyo Human Employee System Prompt
     const systemPrompt =
       customSystemPrompt ||
-      `You are Qwen, a helpful, honest, concise, and intelligent offline AI assistant running locally on the user's mobile device hardware.
+      `You are Tiyo, a real, friendly, smart human shop employee working inside the user's shop (Billzzy Lite POS).
+Personality: ${tiyoConfig.personality.toUpperCase()} SHOP EMPLOYEE.
 Language Instructions:
 - Answer naturally in the user's language (${langInfo.name}).
-- If the user communicates in Tamil or Tanglish (Tamil in English script), respond fluently in Tamil or Tanglish.
-- If asked about personal schedule, private calendar, or daily tasks that you cannot access, honestly state that you do not have access to their external private accounts, and offer to help organize their tasks.
-- For math, science, and factual questions, provide direct, accurate, and step-by-step answers without evasion.
-- Answer helpfully and contextually. Do not use boilerplate or filler text.`;
+- Speak fluently in Tamil, Tanglish (Tamil in English alphabet), or English.
+- You are a real human employee working beside the shop owner. NEVER say "As an AI" or sound like a robot.
+- Speak in short, warm, confident sentences.
+- Current active cart: ${tiyo.getCartCount()} items, Total ₹${tiyo.getCartTotal()}. Items: ${activeCart.map((i) => `${i.quantity}x ${i.name}`).join(', ') || 'Empty'}.
+- Today's shop sales: ₹${sales.todayTotal} (${sales.billsCount} bills).
+- Help the owner with billing, inventory, checking sales, and friendly daily shop conversation.`;
 
     // Check for Tamil / Tanglish Billing & Order intent
     const structuredBilling = this.parseBillingOrInventoryIntent(userPrompt || '');
@@ -374,36 +382,14 @@ Language Instructions:
           structuredData: structuredBilling,
         };
       } else if (Platform.OS === 'web') {
-        // Web platform edge inference fallback
-        console.log(`[AIEngine] Using web platform edge inference pipeline for ${this.currentModelId || 'Qwen3 0.6B'}`);
+        // Tiyo Human Employee Edge Inference Pipeline on Web
+        console.log(`[AIEngine] Tiyo Employee handling request for ${this.currentModelId || 'Qwen3 0.6B'}`);
 
-        let responseContent = '';
-        if (structuredBilling && structuredBilling.items.length > 0) {
-          const itemsList = structuredBilling.items
-            .map((it) => `• ${it.quantity}x ${it.itemName}${it.totalEstimate ? ` - ₹${it.totalEstimate}` : ''}`)
-            .join('\n');
-          const totalVal = structuredBilling.items.reduce((sum, it) => sum + (it.totalEstimate || 0), 0);
-          responseContent =
-            `🛒 **Billing Order Created Successfully:**\n\n${itemsList}\n\n` +
-            (totalVal > 0 ? `**Total Estimated Amount:** ₹${totalVal}\n` : '') +
-            `**Status:** Ready for checkout (Tamil/Tanglish Billing Engine)`;
-        } else {
-          const lower = (effectiveUserPrompt || '').toLowerCase();
-          if (
-            lower.includes('introduce') ||
-            lower.includes('who are you') ||
-            lower.includes('hello') ||
-            lower.includes('hi')
-          ) {
-            responseContent = `Hello! I am SaaS AI Brain running Qwen offline on your device. I provide on-device edge AI, billing order parsing in English, Tamil & Tanglish, and automated workflows without sending data to external servers.`;
-          } else if (lower.includes('inventory') || lower.includes('stock')) {
-            responseContent = `Inventory management involves tracking stock levels, purchases, sales, and deliveries. With SaaS AI Brain, you can add and manage items in real-time using voice or text commands with automatic billing parsing.`;
-          } else {
-            responseContent = `Understood. Processing your request using ${this.currentModelId || 'Qwen3 0.6B'}. Tanglish and Tamil billing commands like "Rendu Pepsi add pannu" or "Oru Coke add pannu" are parsed instantly with structured order output.`;
-          }
-        }
+        const tiyoResponse = await tiyo.respondToOwner(effectiveUserPrompt);
+        const responseContent = tiyoResponse.displayText;
+        const activeBilling = tiyoResponse.structuredBilling || structuredBilling;
 
-        // Simulate streaming tokens for rich UI feedback
+        // Simulate fast conversational token streaming
         const words = responseContent.split(' ');
         tokenCount = words.length;
         firstTokenTime = Date.now();
@@ -412,11 +398,11 @@ Language Instructions:
           const word = (i === 0 ? '' : ' ') + words[i];
           fullResponse += word;
           if (onToken) onToken(word);
-          await new Promise((r) => setTimeout(r, 15));
+          await new Promise((r) => setTimeout(r, 12));
         }
 
         const totalTimeMs = Math.max(70, Date.now() - startTime);
-        const ttft = 45;
+        const ttft = 35;
         const tps = parseFloat(((tokenCount / totalTimeMs) * 1000).toFixed(1));
 
         return {
@@ -427,7 +413,7 @@ Language Instructions:
             totalTimeMs,
             totalTokens: tokenCount,
           },
-          structuredData: structuredBilling,
+          structuredData: activeBilling,
         };
       } else {
         // Native llama.rn context is missing on Android
