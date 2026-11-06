@@ -1,5 +1,18 @@
-import * as Speech from 'expo-speech';
 import { Platform } from 'react-native';
+
+let ExpoSpeech: any = null;
+try {
+  ExpoSpeech = require('expo-speech');
+} catch {
+  // Fallback for headless / Node test environments
+}
+
+export interface VoiceItem {
+  identifier: string;
+  name: string;
+  quality?: string;
+  language: string;
+}
 
 export interface TiyoVoiceOptions {
   rate?: number; // 0.5x to 1.5x
@@ -17,7 +30,7 @@ export class TiyoVoiceOut {
   private isSpeaking: boolean = false;
   private speedRate: number = 1.0; // 0.5x to 1.5x
   private mouthInterval: any = null;
-  private availableVoices: Speech.Voice[] = [];
+  private availableVoices: VoiceItem[] = [];
 
   private constructor() {
     this.loadAvailableVoices();
@@ -30,12 +43,12 @@ export class TiyoVoiceOut {
     return TiyoVoiceOut.instance;
   }
 
-  public async loadAvailableVoices(): Promise<Speech.Voice[]> {
+  public async loadAvailableVoices(): Promise<VoiceItem[]> {
     try {
-      if (Platform.OS !== 'web') {
-        const voices = await Speech.getAvailableVoicesAsync();
+      if (Platform.OS !== 'web' && ExpoSpeech?.getAvailableVoicesAsync) {
+        const voices = await ExpoSpeech.getAvailableVoicesAsync();
         this.availableVoices = voices.filter(
-          (v) => v.language.startsWith('en') || v.language.includes('en-US') || v.language.includes('en-IN')
+          (v: VoiceItem) => v.language.startsWith('en') || v.language.includes('en-US') || v.language.includes('en-IN')
         );
       }
     } catch (e) {
@@ -44,7 +57,7 @@ export class TiyoVoiceOut {
     return this.availableVoices;
   }
 
-  public getAvailableVoices(): Speech.Voice[] {
+  public getAvailableVoices(): VoiceItem[] {
     return this.availableVoices;
   }
 
@@ -105,7 +118,9 @@ export class TiyoVoiceOut {
     }
 
     try {
-      await Speech.stop();
+      if (ExpoSpeech?.stop) {
+        await ExpoSpeech.stop();
+      }
     } catch (e) {
       console.warn('[TiyoVoiceOut] Error stopping native speech:', e);
     }
@@ -172,27 +187,36 @@ export class TiyoVoiceOut {
     // Android / Native Expo Speech path
     try {
       options.onStart?.();
-      Speech.speak(cleanSpeech, {
-        language: 'en-US',
-        rate,
-        pitch: options.pitch ?? 1.0,
-        voice: options.voiceIdentifier,
-        onDone: () => {
+      if (ExpoSpeech?.speak) {
+        ExpoSpeech.speak(cleanSpeech, {
+          language: 'en-US',
+          rate,
+          pitch: options.pitch ?? 1.0,
+          voice: options.voiceIdentifier,
+          onDone: () => {
+            this.isSpeaking = false;
+            this.stopMouthOscillation(options.onMouthMove);
+            options.onDone?.();
+          },
+          onStopped: () => {
+            this.isSpeaking = false;
+            this.stopMouthOscillation(options.onMouthMove);
+            options.onStopped?.();
+          },
+          onError: (err: any) => {
+            this.isSpeaking = false;
+            this.stopMouthOscillation(options.onMouthMove);
+            options.onError?.(err);
+          },
+        });
+      } else {
+        // Fallback for non-native test environments
+        setTimeout(() => {
           this.isSpeaking = false;
           this.stopMouthOscillation(options.onMouthMove);
           options.onDone?.();
-        },
-        onStopped: () => {
-          this.isSpeaking = false;
-          this.stopMouthOscillation(options.onMouthMove);
-          options.onStopped?.();
-        },
-        onError: (err) => {
-          this.isSpeaking = false;
-          this.stopMouthOscillation(options.onMouthMove);
-          options.onError?.(err);
-        },
-      });
+        }, 100);
+      }
     } catch (nativeErr) {
       this.isSpeaking = false;
       this.stopMouthOscillation(options.onMouthMove);
