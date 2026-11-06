@@ -21,28 +21,37 @@ console.log('====================================================\n');
 
 let passedTests = 0;
 
-try {
-  // 1. Run PromptEngine Unit Tests
-  const { runPromptTests } = require('../src/__tests__/prompt.test.ts');
-  runPromptTests();
-  passedTests += 6;
+async function main() {
+  try {
+    // 1. Run PromptEngine Unit Tests
+    const { runPromptTests } = require('../src/__tests__/prompt.test.ts');
+    await runPromptTests();
+    passedTests += 6;
 
-  // 2. Run BillingParserService Unit Tests
-  const { runBillingParserTests } = require('../src/__tests__/billingParser.test.ts');
-  runBillingParserTests();
-  passedTests += 9;
+    // 2. Run BillingParserService Unit Tests
+    const { runBillingParserTests } = require('../src/__tests__/billingParser.test.ts');
+    await runBillingParserTests();
+    passedTests += 9;
 
-  // 3. Run TiyoBrain Unit Tests
-  const { runTiyoBrainTests } = require('../src/__tests__/tiyoBrain.test.ts');
-  runTiyoBrainTests();
-  passedTests += 7;
+    // 3. Run TiyoBrain Unit Tests
+    const { runTiyoBrainTests } = require('../src/__tests__/tiyoBrain.test.ts');
+    await runTiyoBrainTests();
+    passedTests += 7;
 
-  console.log('====================================================');
-  console.log(`🎉 ALL ${passedTests} UNIT TESTS PASSED SUCCESSFULLY!`);
-  console.log('====================================================');
-  process.exit(0);
-} catch (err) {
-  console.error('\n❌ TEST RUNNER FAILED:');
-  console.error(err);
-  process.exit(1);
+    // 4. Run ActionEngine Unit Tests
+    const { runActionEngineTests } = require('../src/__tests__/actionEngine.test.ts');
+    await runActionEngineTests();
+    passedTests += 6;
+
+    console.log('====================================================');
+    console.log(`🎉 ALL ${passedTests} UNIT TESTS PASSED SUCCESSFULLY!`);
+    console.log('====================================================');
+    process.exit(0);
+  } catch (err) {
+    console.error('\n❌ TEST RUNNER FAILED:');
+    console.error(err);
+    process.exit(1);
+  }
 }
+
+main();
