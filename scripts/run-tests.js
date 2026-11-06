@@ -1,62 +1,6 @@
 const fs = require('fs');
 const path = require('path');
 const ts = require('typescript');
-const Module = require('module');
-
-// Intercept react-native, expo-speech, and react-native-svg in Node.js test environment
-const originalRequire = Module.prototype.require;
-Module.prototype.require = function (id) {
-  if (id === 'react-native') {
-    return {
-      Platform: { OS: 'android', select: (objs) => objs.android || objs.default },
-      PermissionsAndroid: {
-        PERMISSIONS: { RECORD_AUDIO: 'android.permission.RECORD_AUDIO' },
-        RESULTS: { GRANTED: 'granted', DENIED: 'denied', NEVER_ASK_AGAIN: 'never_ask_again' },
-        request: async () => 'granted',
-        check: async () => true,
-      },
-      Linking: {
-        openSettings: async () => {},
-      },
-      Animated: {
-        Value: class {
-          constructor(val) { this._val = val; }
-          setValue(val) { this._val = val; }
-          interpolate() { return this; }
-        },
-        timing: () => ({ start: (cb) => cb && cb({ finished: true }) }),
-        loop: (anim) => ({ start: () => {}, stop: () => {} }),
-        sequence: (anims) => ({ start: (cb) => cb && cb({ finished: true }) }),
-        parallel: (anims) => ({ start: (cb) => cb && cb({ finished: true }) }),
-      },
-      StyleSheet: { create: (s) => s },
-      View: 'View',
-      Text: 'Text',
-    };
-  }
-  if (id === 'expo-speech') {
-    return {
-      speak: () => {},
-      stop: async () => {},
-      getAvailableVoicesAsync: async () => [
-        { identifier: 'en-us-x-sfg', name: 'English (US)', language: 'en-US' }
-      ],
-    };
-  }
-  if (id === 'react-native-svg') {
-    return {
-      default: 'Svg',
-      Svg: 'Svg',
-      G: 'G',
-      Circle: 'Circle',
-      Rect: 'Rect',
-      Path: 'Path',
-      Line: 'Line',
-      Polygon: 'Polygon',
-    };
-  }
-  return originalRequire.apply(this, arguments);
-};
 
 // Register .ts extension compiler in Node runtime
 require.extensions['.ts'] = function (module, filename) {
@@ -66,7 +10,6 @@ require.extensions['.ts'] = function (module, filename) {
       module: ts.ModuleKind.CommonJS,
       target: ts.ScriptTarget.ES2020,
       esModuleInterop: true,
-      jsx: ts.JsxEmit.React,
     },
   }).outputText;
   module._compile(transpiled, filename);

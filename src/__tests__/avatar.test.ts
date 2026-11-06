@@ -20,3 +20,4 @@ export function runAvatarTests() {
 
   console.log('--- All TiyoAvatar unit tests PASSED ---\n');
 }
+

@@ -39,3 +39,4 @@ This project respects open-source licensing. All packages, assets, and libraries
 ## 3. Robot Avatar Assets
 - **Robot Avatar (2D Animated)**: Custom vector illustration built entirely with `react-native-svg` and React Native Animated/Reanimated primitives. 100% proprietary to this project, zero external copyrighted vector assets.
 - **License**: MIT / Proprietary to Project Owner.
+

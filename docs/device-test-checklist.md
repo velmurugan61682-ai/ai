@@ -92,3 +92,4 @@ Since `adb devices` showed no connected physical device or running emulator duri
   2. Observe memory, UI smoothness, and token budget trimming.
 - **Expected Result**:
   No Out-Of-Memory (OOM) crash, no app freezing, context budget kept within limits, no `<think>` tags leaked.
+

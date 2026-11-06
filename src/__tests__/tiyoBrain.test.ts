@@ -87,21 +87,22 @@ export function runTiyoBrainTests() {
   // Test 7: History trimming retains recent turns and drops oldest within budget
   {
     const history: TiyoMessage[] = [];
-    for (let i = 1; i <= 30; i++) {
+    for (let i = 1; i <= 20; i++) {
       history.push({
         id: `turn-${i}`,
         role: i % 2 === 1 ? 'user' : 'assistant',
-        content: `Message ${i}: ${'Lorem ipsum '.repeat(100)}`,
+        content: `Message ${i}: ${'Lorem ipsum '.repeat(30)}`,
         timestamp: i * 1000,
       });
     }
 
     const prompt = buildTiyoPrompt(history, 'Latest user query');
     assert.ok(prompt.includes('Latest user query'), 'Prompt must include current user query');
-    assert.ok(prompt.includes('Message 30'), 'Recent turn 30 must be preserved');
+    assert.ok(prompt.includes('Message 20'), 'Recent turn 20 must be preserved');
     assert.ok(!prompt.includes('Message 1:'), 'Old turn 1 should be trimmed out to respect budget');
     console.log('  ✅ Conversation history budget trimming passed');
   }
 
   console.log('--- All TiyoBrain unit tests PASSED ---\n');
 }
+

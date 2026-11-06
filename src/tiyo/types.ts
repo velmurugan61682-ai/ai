@@ -48,3 +48,4 @@ export interface ITiyoBrain {
     onToken?: (token: string) => void
   ): Promise<TiyoResponse>;
 }
+

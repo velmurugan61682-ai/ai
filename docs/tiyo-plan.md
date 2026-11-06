@@ -99,3 +99,4 @@ We evaluated the three web inference options:
   - Build Android debug APK: `cd android && gradlew.bat assembleDebug`.
   - Measure APK size and web bundle export size.
   - Execute full test suite and typechecks.
+
