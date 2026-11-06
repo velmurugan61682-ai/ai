@@ -43,6 +43,11 @@ async function main() {
     await runActionEngineTests();
     passedTests += 6;
 
+    // 5. Run VoiceOut Unit Tests
+    const { runVoiceOutTests } = require('../src/__tests__/voiceOut.test.ts');
+    await runVoiceOutTests();
+    passedTests += 3;
+
     console.log('====================================================');
     console.log(`🎉 ALL ${passedTests} UNIT TESTS PASSED SUCCESSFULLY!`);
     console.log('====================================================');
