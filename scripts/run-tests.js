@@ -53,6 +53,11 @@ async function main() {
     await runVoiceInTests();
     passedTests += 3;
 
+    // 7. Run Avatar Unit Tests
+    const { runAvatarTests } = require('../src/__tests__/avatar.test.ts');
+    await runAvatarTests();
+    passedTests += 2;
+
     console.log('====================================================');
     console.log(`🎉 ALL ${passedTests} UNIT TESTS PASSED SUCCESSFULLY!`);
     console.log('====================================================');
