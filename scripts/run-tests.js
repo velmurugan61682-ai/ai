@@ -48,6 +48,11 @@ async function main() {
     await runVoiceOutTests();
     passedTests += 3;
 
+    // 6. Run VoiceIn Unit Tests
+    const { runVoiceInTests } = require('../src/__tests__/voiceIn.test.ts');
+    await runVoiceInTests();
+    passedTests += 3;
+
     console.log('====================================================');
     console.log(`🎉 ALL ${passedTests} UNIT TESTS PASSED SUCCESSFULLY!`);
     console.log('====================================================');
