@@ -20,6 +20,7 @@ import {
   HardDrive,
   BarChart2,
   Key,
+  Bot,
 } from 'lucide-react-native';
 import { lightTheme, darkTheme, ThemeColors } from './src/theme/theme';
 import {
@@ -51,6 +52,7 @@ import { PerformanceComparisonScreen } from './src/screens/PerformanceComparison
 import { SettingsScreen } from './src/screens/SettingsScreen';
 import { ApiKeysScreen } from './src/screens/ApiKeysScreen';
 import { ApiDocsScreen } from './src/screens/ApiDocsScreen';
+import { TiyoScreen } from './src/screens/TiyoScreen';
 
 export type ScreenId =
   | 'Splash'
@@ -66,7 +68,8 @@ export type ScreenId =
   | 'PerformanceComparison'
   | 'Settings'
   | 'ApiKeys'
-  | 'ApiDocs';
+  | 'ApiDocs'
+  | 'Tiyo';
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<ScreenId>('Splash');
@@ -385,6 +388,9 @@ export default function App() {
           />
         );
 
+      case 'Tiyo':
+        return <TiyoScreen colors={colors} />;
+
       default:
         return null;
     }
@@ -446,6 +452,26 @@ export default function App() {
               ]}
             >
               Chat
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.tabItem}
+            onPress={() => setCurrentScreen('Tiyo')}
+          >
+            <Bot
+              size={20}
+              color={currentScreen === 'Tiyo' ? colors.primary : colors.textSubtle}
+            />
+            <Text
+              style={[
+                styles.tabLabel,
+                {
+                  color: currentScreen === 'Tiyo' ? colors.primary : colors.textSubtle,
+                },
+              ]}
+            >
+              Tiyo
             </Text>
           </TouchableOpacity>
 
