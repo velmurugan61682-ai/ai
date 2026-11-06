@@ -32,6 +32,11 @@ try {
   runBillingParserTests();
   passedTests += 9;
 
+  // 3. Run TiyoBrain Unit Tests
+  const { runTiyoBrainTests } = require('../src/__tests__/tiyoBrain.test.ts');
+  runTiyoBrainTests();
+  passedTests += 7;
+
   console.log('====================================================');
   console.log(`🎉 ALL ${passedTests} UNIT TESTS PASSED SUCCESSFULLY!`);
   console.log('====================================================');
